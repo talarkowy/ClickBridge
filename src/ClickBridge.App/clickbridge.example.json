@@ -1,0 +1,30 @@
+// Copy to "clickbridge.json" (next to clickbridge.exe or in the working folder) and adjust.
+{
+  // Name shown in MyWhoosh.
+  "deviceName": "ClickBridge",
+
+  // Preferred TCP port (the next free one is used if taken).
+  "port": 36867,
+
+  // "Auto": connect the left Click v2 puck, which relays both pucks.
+  // "RightOnly": only the right puck: "+" shifts up, "B" shifts down.
+  "mode": "Auto",
+
+  // Advertise over mDNS so MyWhoosh finds the bridge by itself.
+  "mdns": true,
+
+  // IPv4 address to advertise; leave empty to auto-detect.
+  "advertiseAddress": "",
+
+  // How often the device status (battery / connected) is resent, in seconds.
+  "statusIntervalSeconds": 30,
+
+  // Overrides of the default mapping (Zwift button -> OpenBikeControl button).
+  // Zwift buttons: Up, Down, Left, Right, ShiftUpLeft ("-"), A, B, Y, Z, ShiftUpRight ("+").
+  // OBC buttons: ShiftUp, ShiftDown, Up, Down, Left, Right, Select, Back, Menu, Home,
+  //              SteerLeft, SteerRight, CameraView, ... or a hex id like "0x40", or "None".
+  "mapping": {
+    // "Left": "SteerLeft",
+    // "Right": "SteerRight"
+  }
+}

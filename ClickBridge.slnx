@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClickBridge.App/ClickBridge.App.csproj" />
+    <Project Path="src/ClickBridge.Ble/ClickBridge.Ble.csproj" />
+    <Project Path="src/ClickBridge.Core/ClickBridge.Core.csproj" />
+    <Project Path="src/ClickBridge.Diagnostics/ClickBridge.Diagnostics.csproj" />
+    <Project Path="src/ClickBridge.Obc/ClickBridge.Obc.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ClickBridge.Core.Tests/ClickBridge.Core.Tests.csproj" />
+  </Folder>
+</Solution>

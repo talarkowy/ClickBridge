@@ -1,0 +1,21 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+indent_style = space
+
+[*.cs]
+indent_size = 4
+# C#-only codebase: member names clashing with VB keywords (Event, Error) are fine.
+dotnet_diagnostic.CA1716.severity = none
+
+[*.{csproj,props,json,slnx,xml}]
+indent_size = 2
+
+# Test names use Method_Scenario underscores.
+[tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none
+# xUnit disposes fixtures through IAsyncLifetime.DisposeAsync.
+dotnet_diagnostic.CA1001.severity = none
