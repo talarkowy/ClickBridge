@@ -36,6 +36,10 @@ public static class ZwiftConstants
 
     /// <summary>Handshake for the Click v2: "RideOn" followed by 0x02 0x03.</summary>
     public static byte[] ClickV2StartCommand => [.. RideOn, 0x02, 0x03];
+
+    public static ReadOnlySpan<byte> UnlockChallengeHeader => [0xFF, 0x03, 0x00];
+
+    public static byte[] CreateUnlockReply(ReadOnlySpan<byte> signedReply) => [0xFF, 0x04, 0x00, .. signedReply];
 }
 
 /// <summary>Message opcodes (first byte of every frame except the "RideOn" handshake response).</summary>

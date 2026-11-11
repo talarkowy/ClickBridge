@@ -117,9 +117,20 @@ public class ZwiftMessageParserTests
     [InlineData(new byte[] { 0xFF, 0x05, 0x00, 0xEA, 0x05 }, true)]
     [InlineData(new byte[] { 0xFF, 0x05, 0x00, 0xFA, 0x05 }, true)]
     [InlineData(new byte[] { 0xFF, 0x01, 0x02 }, false)]
+    [InlineData(new byte[] { 0xFF, 0x03, 0x00 }, false)]
     public void VendorMessage_DetectsStoppedPattern(byte[] frame, bool stopped)
     {
         Assert.Equal(stopped, Assert.IsType<VendorMessage>(ZwiftMessageParser.Parse(frame)).LooksLikeStopped);
+    }
+
+    [Fact]
+    public void UnlockChallenge_PreservesProtobufAfterHeader()
+    {
+        byte[] payload = [0x0A, 0x02, 0x02, 0xFF, 0x10, 0x80, 0x80, 0x8C, 0x10];
+        byte[] frame = [0xFF, 0x03, 0x00, .. payload];
+
+        var message = Assert.IsType<UnlockChallenge>(ZwiftMessageParser.Parse(frame));
+        Assert.Equal(payload, message.Payload.ToArray());
     }
 
     [Fact]

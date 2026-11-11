@@ -7,12 +7,14 @@ public sealed class FileConsoleLog : IBridgeLog, IDisposable
 {
     private readonly Lock _lock = new();
     private readonly StreamWriter _file;
+    private readonly bool _writeToConsole;
 
-    public FileConsoleLog(string directory, string filePrefix)
+    public FileConsoleLog(string directory, string filePrefix, bool writeToConsole = true)
     {
         Directory.CreateDirectory(directory);
         FilePath = Path.Combine(directory, $"{filePrefix}-{DateTime.Now:yyyyMMdd-HHmmss}.log");
         _file = new StreamWriter(FilePath, append: false) { AutoFlush = true };
+        _writeToConsole = writeToConsole;
     }
 
     public string FilePath { get; }
@@ -35,7 +37,7 @@ public sealed class FileConsoleLog : IBridgeLog, IDisposable
         lock (_lock)
         {
             _file.WriteLine(line);
-            if (toConsole)
+            if (_writeToConsole && toConsole)
             {
                 var previous = Console.ForegroundColor;
                 Console.ForegroundColor = color;

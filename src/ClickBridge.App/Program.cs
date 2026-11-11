@@ -4,6 +4,7 @@ using ClickBridge.Core.Config;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Mapping;
 using ClickBridge.Core.Obc;
+using ClickBridge.Hosting;
 
 const string usage = """
     clickbridge — Zwift Click v2 -> OpenBikeControl (MyWhoosh) bridge
@@ -14,6 +15,8 @@ const string usage = """
       --name <text>               Name shown in the training app (default: ClickBridge).
       --port <n>                  Preferred TCP port (default: 36867).
       --right-only                Use only the right Click v2 puck (+ shifts up, B shifts down).
+      --zwift-login               Sign in to Zwift and save a session for automatic Click v2 unlocks.
+      --zwift-logout              Delete the saved local Zwift session and exit.
       --advertise-address <ip>    IPv4 address to advertise (default: auto-detect).
       --no-mdns                   Do not advertise over mDNS.
       --log-dir <path>            Log directory (default: ./logs).
@@ -28,9 +31,10 @@ const string usage = """
 
 BridgeConfig config;
 string logDirectory;
+ZwiftSessionAction zwiftSessionAction;
 try
 {
-    (config, logDirectory) = ParseArguments(args);
+    (config, logDirectory, zwiftSessionAction) = ParseArguments(args);
 }
 catch (HelpRequestedException)
 {
@@ -45,10 +49,59 @@ catch (Exception ex) when (ex is ArgumentException or FormatException or IOExcep
     return 2;
 }
 
+if (zwiftSessionAction == ZwiftSessionAction.Forget)
+{
+    try
+    {
+        ZwiftAccount.ForgetSavedSession();
+        Console.WriteLine("Local Zwift session removed.");
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"Could not remove the local Zwift session ({ex.GetType().Name}).");
+        return 1;
+    }
+}
+
 using var log = new FileConsoleLog(logDirectory, "clickbridge");
 log.Info("APP", $"clickbridge started. Log file: {log.FilePath}");
 
-await using var host = new BridgeHost(config, log);
+using var account = new ZwiftAccount(log);
+if (config.Mode != BridgeMode.RightOnly || zwiftSessionAction == ZwiftSessionAction.SignIn)
+{
+    try
+    {
+        if (zwiftSessionAction == ZwiftSessionAction.SignIn)
+        {
+            await ConsoleZwiftSignIn.SignInAsync(account);
+        }
+        else
+        {
+            await account.LoadAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        var detail = ex switch
+        {
+            UnauthorizedAccessException => "Zwift rejected the credentials.",
+            HttpRequestException { StatusCode: { } status } => $"Zwift returned HTTP {(int)status}.",
+            HttpRequestException => "Could not reach Zwift.",
+            OperationCanceledException => "Zwift sign-in timed out.",
+            InvalidOperationException => ex.Message,
+            _ => $"{ex.GetType().Name}.",
+        };
+        log.Error("APP", $"Zwift sign-in failed. {detail}");
+        return 1;
+    }
+
+    log.Info("APP", account.Client is null
+        ? "Automatic Click v2 unlock is off. Use --zwift-login to enable it."
+        : "Zwift session loaded for automatic Click v2 unlock.");
+}
+
+await using var host = new BridgeHost(config, log, account);
 try
 {
     await host.StartAsync();
@@ -132,11 +185,12 @@ void PrintSummary()
     }
 }
 
-static (BridgeConfig Config, string LogDirectory) ParseArguments(string[] args)
+static (BridgeConfig Config, string LogDirectory, ZwiftSessionAction ZwiftSession) ParseArguments(string[] args)
 {
     string? configPath = null;
     var overrides = new List<Action<BridgeConfig>>();
     var logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
+    var zwiftSession = ZwiftSessionAction.Reuse;
 
     for (var i = 0; i < args.Length; i++)
     {
@@ -158,6 +212,15 @@ static (BridgeConfig Config, string LogDirectory) ParseArguments(string[] args)
             case "--right-only":
                 overrides.Add(c => c.Mode = BridgeMode.RightOnly);
                 break;
+            case "--zwift-login" or "--zwift-logout":
+                var action = args[i] == "--zwift-login" ? ZwiftSessionAction.SignIn : ZwiftSessionAction.Forget;
+                if (zwiftSession != ZwiftSessionAction.Reuse && zwiftSession != action)
+                {
+                    throw new ArgumentException("Choose either --zwift-login or --zwift-logout.");
+                }
+
+                zwiftSession = action;
+                break;
             case "--advertise-address":
                 var address = Next(args, ref i);
                 overrides.Add(c => c.AdvertiseAddress = address);
@@ -171,6 +234,11 @@ static (BridgeConfig Config, string LogDirectory) ParseArguments(string[] args)
             default:
                 throw new ArgumentException($"Unknown argument '{args[i]}'.");
         }
+    }
+
+    if (zwiftSession == ZwiftSessionAction.Forget)
+    {
+        return (new BridgeConfig(), logDirectory, zwiftSession);
     }
 
     configPath ??= new[]
@@ -192,10 +260,17 @@ static (BridgeConfig Config, string LogDirectory) ParseArguments(string[] args)
         Console.WriteLine($"Settings: {Path.GetFullPath(configPath)}");
     }
 
-    return (config, logDirectory);
+    return (config, logDirectory, zwiftSession);
 
     static string Next(string[] args, ref int i) =>
         ++i < args.Length ? args[i] : throw new ArgumentException($"Missing value for {args[i - 1]}.");
 }
 
 internal sealed class HelpRequestedException : Exception;
+
+internal enum ZwiftSessionAction
+{
+    Reuse,
+    SignIn,
+    Forget,
+}

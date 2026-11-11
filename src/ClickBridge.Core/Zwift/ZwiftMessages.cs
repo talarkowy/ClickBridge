@@ -51,6 +51,13 @@ public sealed record VendorMessage(byte[] Raw, bool LooksLikeStopped) : ZwiftMes
     public override string Describe() => LooksLikeStopped ? "Vendor message (STOPPED pattern!)" : "Vendor message";
 }
 
+public sealed record UnlockChallenge(byte[] Raw) : ZwiftMessage(Raw)
+{
+    public ReadOnlyMemory<byte> Payload => Raw.AsMemory(ZwiftConstants.UnlockChallengeHeader.Length);
+
+    public override string Describe() => $"Click v2 unlock challenge ({Payload.Length}B)";
+}
+
 public sealed record OtherMessage(byte[] Raw, byte Opcode) : ZwiftMessage(Raw)
 {
     public override string Describe() => ZwiftOpcodes.Name(Opcode);
