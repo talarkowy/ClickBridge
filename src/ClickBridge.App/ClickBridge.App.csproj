@@ -9,8 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ClickBridge.Ble\ClickBridge.Ble.csproj" />
-    <ProjectReference Include="..\ClickBridge.Obc\ClickBridge.Obc.csproj" />
+    <ProjectReference Include="..\ClickBridge.Hosting\ClickBridge.Hosting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

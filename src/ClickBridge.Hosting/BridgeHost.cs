@@ -9,10 +9,10 @@ using ClickBridge.Core.Obc;
 using ClickBridge.Core.Zwift;
 using ClickBridge.Obc;
 
-namespace ClickBridge.App;
+namespace ClickBridge.Hosting;
 
 /// <summary>Wires Zwift controllers (BLE) to the OpenBikeControl server (TCP + mDNS).</summary>
-internal sealed class BridgeHost : IAsyncDisposable
+public sealed class BridgeHost : IAsyncDisposable
 {
     private const string Tag = "BRIDGE";
     private const string ServiceType = "_openbikecontrol._tcp";
@@ -26,6 +26,7 @@ internal sealed class BridgeHost : IAsyncDisposable
     private readonly ButtonMapping _mapping;
     private readonly ObcStateTracker _tracker;
     private readonly ObcServer _server;
+    private readonly ZwiftAccount? _account;
     private readonly ConcurrentDictionary<ulong, ZwiftController> _controllers = new();
     private readonly ConcurrentDictionary<ZwiftDeviceKind, DateTime> _lastSeen = new();
     private readonly ConcurrentDictionary<ZwiftDeviceKind, bool> _ignoredKindsLogged = new();
@@ -34,10 +35,11 @@ internal sealed class BridgeHost : IAsyncDisposable
     private ZwiftControllerScanner? _scanner;
     private WindowsMdnsAdvertiser? _mdns;
 
-    public BridgeHost(BridgeConfig config, IBridgeLog log)
+    public BridgeHost(BridgeConfig config, IBridgeLog log, ZwiftAccount? account)
     {
         _config = config;
         _log = log;
+        _account = account;
         _mapping = config.BuildMapping();
         _tracker = new ObcStateTracker(_mapping);
         _server = new ObcServer(log, config.Port, TimeSpan.FromSeconds(Math.Max(5, config.StatusIntervalSeconds)));
@@ -86,6 +88,20 @@ internal sealed class BridgeHost : IAsyncDisposable
             await controller.ForceReconnectAsync().ConfigureAwait(false);
         }
     }
+
+    public async Task ReconnectLeftControllerAsync()
+    {
+        foreach (var controller in _controllers.Values.Where(c => c.Kind == ZwiftDeviceKind.ClickV2Left && c.IsReady))
+        {
+            await controller.ForceReconnectAsync().ConfigureAwait(false);
+        }
+    }
+
+    public bool BluetoothAvailable => _scanner is not null;
+
+    public bool ControllerConnected => _controllers.Values.Any(controller => controller.IsReady);
+
+    public bool TrainingAppConnected => _server.Clients.Count > 0;
 
     public IEnumerable<string> Summary()
     {
@@ -176,7 +192,8 @@ internal sealed class BridgeHost : IAsyncDisposable
 
         var controller = _controllers.GetOrAdd(seen.Address, address =>
         {
-            var c = new ZwiftController(address, seen.Kind, _log);
+            var c = new ZwiftController(address, seen.Kind, _log,
+                unlockClient: seen.Kind == ZwiftDeviceKind.ClickV2Left && _account is { } account ? () => account.Client : null);
             c.ButtonsChanged += OnButtonsChanged;
             c.ReadyChanged += OnReadyChanged;
             c.BatteryChanged += (_, _) => PublishStatus();

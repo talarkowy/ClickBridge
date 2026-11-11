@@ -4,7 +4,9 @@
     <Project Path="src/ClickBridge.Ble/ClickBridge.Ble.csproj" />
     <Project Path="src/ClickBridge.Core/ClickBridge.Core.csproj" />
     <Project Path="src/ClickBridge.Diagnostics/ClickBridge.Diagnostics.csproj" />
+    <Project Path="src/ClickBridge.Hosting/ClickBridge.Hosting.csproj" />
     <Project Path="src/ClickBridge.Obc/ClickBridge.Obc.csproj" />
+    <Project Path="src/ClickBridge.Tray/ClickBridge.Tray.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ClickBridge.Core.Tests/ClickBridge.Core.Tests.csproj" />

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>ClickBridge.ico</ApplicationIcon>
+    <AssemblyName>clickbridge-tray</AssemblyName>
+    <RootNamespace>ClickBridge.Tray</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="ClickBridge.ico" LogicalName="ClickBridge.ico" />
+    <ProjectReference Include="..\ClickBridge.Hosting\ClickBridge.Hosting.csproj" />
+    <None Include="..\ClickBridge.App\clickbridge.example.json" Link="clickbridge.example.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -17,6 +17,8 @@ Notatki z researchu i pomiarów: [docs/research.md](docs/research.md).
 | `src/ClickBridge.Ble` | Połączenie BLE z kontrolerami Zwift (WinRT) |
 | `src/ClickBridge.Obc` | Serwer TCP OpenBikeControl + ogłaszanie mDNS przez wbudowany responder Windows |
 | `src/ClickBridge.App` | `clickbridge.exe` — mostek |
+| `src/ClickBridge.Tray` | `clickbridge-tray.exe` — mostek z ikoną przy zegarze i logowaniem do Zwift |
+| `src/ClickBridge.Hosting` | Wspólne uruchamianie mostka i obsługa zapisanej sesji Zwift |
 | `src/ClickBridge.Diagnostics` | `click-diag.exe` — narzędzie do badania zachowania Clicka |
 | `tests/ClickBridge.Core.Tests` | Testy xUnit (protokoły, mapowanie, serwer TCP na loopbacku) |
 
@@ -26,6 +28,18 @@ Wymagania: Windows 10 2004+ z Bluetooth LE, .NET SDK 10.
 dotnet build ClickBridge.slnx
 dotnet test
 ```
+
+## clickbridge-tray — aplikacja w obszarze powiadomień
+
+```powershell
+dotnet run --project src/ClickBridge.Tray -c Release
+```
+
+Po kompilacji możesz też uruchomić `clickbridge-tray.exe` z katalogu `src/ClickBridge.Tray/bin/Release/net10.0-windows10.0.19041.0`. Zamknij wersję konsolową przed uruchomieniem wersji z ikoną, żeby jeden mostek obsługiwał Clicka.
+
+Kliknij ikonę ClickBridge przy zegarze. Jeśli jej nie widać, rozwiń ukryte ikony strzałką `^`. W oknie wpisz e-mail i hasło do konta Zwift, a potem wybierz **Zaloguj się**. Obie wersje używają tego samego zaszyfrowanego tokenu zapisanego przez Windows. Przycisk **Wyloguj się** usuwa lokalną sesję.
+
+Zamknięcie okna `×` chowa formularz, a mostek działa dalej. Ponowne uruchomienie `clickbridge-tray.exe` otwiera okno działającej aplikacji. Prawym przyciskiem na ikonie otworzysz menu z ponownym połączeniem kontrolera i opcją **Zakończ**. Logi wersji z ikoną są w `%LOCALAPPDATA%\ClickBridge\logs`.
 
 ## clickbridge — mostek do MyWhoosh
 
@@ -41,7 +55,21 @@ dotnet run --project src/ClickBridge.App
 Klawisze w trakcie: `U`/`D` — testowa zmiana biegu w górę/dół (bez Clicka), strzałki / `Enter` / `Backspace` —
 testowa nawigacja, `S` — status, `R` — ponowne połączenie z kontrolerami, `Q` — wyjście.
 
-Opcje: `--right-only`, `--name <nazwa>`, `--port <n>`, `--advertise-address <ip>`, `--no-mdns`, `--config <plik>`, `--log-dir <ścieżka>`.
+Opcje: `--right-only`, `--zwift-login`, `--zwift-logout`, `--name <nazwa>`, `--port <n>`, `--advertise-address <ip>`, `--no-mdns`, `--config <plik>`, `--log-dir <ścieżka>`.
+
+### Odblokowanie lewego Clicka v2 przez konto Zwift
+
+```powershell
+dotnet run --project src/ClickBridge.App -- --zwift-login
+```
+
+Podaj e-mail i hasło do konta Zwift w konsoli. Hasło jest ukryte podczas wpisywania i trafia bezpośrednio do `secure.zwift.com`. Mostek zapisuje wyłącznie token odświeżania, zaszyfrowany przez Windows dla bieżącego użytkownika. Przy kolejnych uruchomieniach używa zapisanej sesji automatycznie.
+
+Gdy lewy Click v2 wyśle wyzwanie BLE, mostek pobierze podpisaną odpowiedź z usługi Zwift i przekaże ją kontrolerowi. Wymaga to dostępu do internetu. Wpis `Signed unlock reply sent to SyncRx` oznacza udany zapis BLE. Działanie odblokowania sprawdzisz, naciskając lewy `−` także po upływie pierwszej minuty połączenia.
+
+Jeśli Zwift odrzuci zapisaną sesję, uruchom mostek ponownie z `--zwift-login`. Aby usunąć lokalną sesję, zamknij mostek i uruchom `dotnet run --project src/ClickBridge.App -- --zwift-logout`.
+
+Format wymiany pochodzi z [implementacji Zwiftboard](https://github.com/thomaschampagne/zwiftboard/blob/ee4b1f2156d316398f71aeb09b67282901456b8e/internal/ble/unlock.go).
 
 ### Domyślne mapowanie
 

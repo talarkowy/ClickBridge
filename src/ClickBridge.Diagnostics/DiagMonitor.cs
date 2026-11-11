@@ -125,6 +125,7 @@ internal sealed class DiagMonitor
     private static string DecodeBody(ZwiftMessage message) => message switch
     {
         // Vendor messages carry a 2-byte header (e.g. "03 00") before the protobuf payload.
+        UnlockChallenge challenge => " " + ProtoDump.Format(challenge.Payload.Span),
         VendorMessage { Raw.Length: > 3 } v => $" hdr={Hex.Format(v.Raw.AsSpan(1, 2))} {ProtoDump.Format(v.Raw.AsSpan(3))}",
         OtherMessage { Raw.Length: > 1 } o => " " + ProtoDump.Format(o.Raw.AsSpan(1)),
         _ => string.Empty,

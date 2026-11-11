@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
 using ClickBridge.Core.Logging;
@@ -19,6 +20,7 @@ public sealed class ZwiftController : IDisposable
 
     private readonly IBridgeLog _log;
     private readonly bool _sendHandshake;
+    private readonly Func<ZwiftUnlockClient?>? _unlockClient;
     private readonly SemaphoreSlim _setupLock = new(1, 1);
     private readonly Lock _frameLock = new();
     private readonly ButtonStateTracker _tracker = new();
@@ -29,15 +31,19 @@ public sealed class ZwiftController : IDisposable
     private GattCharacteristic? _async;
     private GattCharacteristic? _syncRx;
     private GattCharacteristic? _syncTx;
+    private CancellationTokenSource? _unlockAttempt;
+    private ReadOnlyMemory<byte> _pendingUnlockChallenge;
     private volatile bool _ready;
-    private bool _disposed;
+    private volatile bool _disposed;
 
-    public ZwiftController(ulong address, ZwiftDeviceKind kind, IBridgeLog log, bool sendHandshake = true)
+    public ZwiftController(ulong address, ZwiftDeviceKind kind, IBridgeLog log, bool sendHandshake = true,
+        Func<ZwiftUnlockClient?>? unlockClient = null)
     {
         Address = address;
         Kind = kind;
         _log = log;
         _sendHandshake = sendHandshake;
+        _unlockClient = unlockClient;
         Tag = $"{kind.ShortName()} {FormatAddress(address)}";
     }
 
@@ -130,12 +136,15 @@ public sealed class ZwiftController : IDisposable
         }
 
         byte[] command = Kind.IsClickV2() ? ZwiftConstants.ClickV2StartCommand : ZwiftConstants.RideOn.ToArray();
-        var option = characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)
-            ? GattWriteOption.WriteWithoutResponse
-            : GattWriteOption.WriteWithResponse;
+        var option = SyncRxWriteOption(characteristic);
         var status = await characteristic.WriteValueAsync(command.AsBuffer(), option);
         _log.Info(Tag, $"SyncRx <= {Hex.Format(command)} ({option}) -> {status}");
     }
+
+    private static GattWriteOption SyncRxWriteOption(GattCharacteristic characteristic) =>
+        characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)
+            ? GattWriteOption.WriteWithoutResponse
+            : GattWriteOption.WriteWithResponse;
 
     private async Task SetupAsync()
     {
@@ -194,19 +203,31 @@ public sealed class ZwiftController : IDisposable
             _log.Verbose(Tag, $"  char {c.Uuid} [{c.CharacteristicProperties}]");
         }
 
-        _async = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.Async);
-        _syncRx = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.SyncRx);
-        _syncTx = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.SyncTx);
-        if (_async is null || _syncRx is null || _syncTx is null)
+        var asyncCharacteristic = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.Async);
+        var syncRx = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.SyncRx);
+        var syncTx = charsResult.Characteristics.FirstOrDefault(c => c.Uuid == ZwiftUuids.SyncTx);
+        if (asyncCharacteristic is null || syncRx is null || syncTx is null)
         {
             _log.Error(Tag, "Missing Zwift characteristic(s) (async / syncRx / syncTx).");
             return;
         }
 
-        _async.ValueChanged += OnAsyncValueChanged;
-        _syncTx.ValueChanged += OnSyncTxValueChanged;
-        await SubscribeAsync(_async, preferIndicate: false).ConfigureAwait(false);
-        await SubscribeAsync(_syncTx, preferIndicate: true).ConfigureAwait(false);
+        lock (_frameLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _async = asyncCharacteristic;
+            _syncRx = syncRx;
+            _syncTx = syncTx;
+            asyncCharacteristic.ValueChanged += OnAsyncValueChanged;
+            syncTx.ValueChanged += OnSyncTxValueChanged;
+        }
+
+        await SubscribeAsync(asyncCharacteristic, preferIndicate: false).ConfigureAwait(false);
+        await SubscribeAsync(syncTx, preferIndicate: true).ConfigureAwait(false);
 
         lock (_frameLock)
         {
@@ -287,16 +308,21 @@ public sealed class ZwiftController : IDisposable
     }
 
     private void OnAsyncValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args) =>
-        HandleFrame("ASYNC", args.CharacteristicValue.ToArray());
+        HandleFrame(sender, "ASYNC", args.CharacteristicValue.ToArray());
 
     private void OnSyncTxValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args) =>
-        HandleFrame("SYNCTX", args.CharacteristicValue.ToArray());
+        HandleFrame(sender, "SYNCTX", args.CharacteristicValue.ToArray());
 
-    private void HandleFrame(string channel, byte[] data)
+    private void HandleFrame(GattCharacteristic source, string channel, byte[] data)
     {
         // Serialized so button edges are computed in arrival order.
         lock (_frameLock)
         {
+            if (_disposed || (source != _async && source != _syncTx))
+            {
+                return;
+            }
+
             var message = ZwiftMessageParser.Parse(data);
             switch (message)
             {
@@ -315,10 +341,112 @@ public sealed class ZwiftController : IDisposable
                 case RideOnResponse:
                     HandshakeAnswered = true;
                     break;
+                case UnlockChallenge challenge when source == _async:
+                    StartUnlock(challenge.Payload);
+                    break;
             }
 
             FrameReceived?.Invoke(this, channel, message);
         }
+    }
+
+    // Called under _frameLock. The pending reply belongs to the current GATT binding and latest challenge.
+    private void StartUnlock(ReadOnlyMemory<byte> payload)
+    {
+        if (_unlockClient?.Invoke() is not { } client || _syncRx is not { } rx
+            || ConnectionStatus != BluetoothConnectionStatus.Connected
+            || payload.Span.SequenceEqual(_pendingUnlockChallenge.Span))
+        {
+            return;
+        }
+
+        CancelUnlock();
+        var attempt = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var challenge = payload.ToArray();
+        _unlockAttempt = attempt;
+        _pendingUnlockChallenge = challenge;
+        _log.Info(Tag, "Click v2 unlock challenge received. Requesting a signed reply from Zwift.");
+        _ = Task.Run(() => SendUnlockReplyAsync(client, rx, challenge, attempt));
+    }
+
+    private async Task SendUnlockReplyAsync(ZwiftUnlockClient client, GattCharacteristic rx,
+        ReadOnlyMemory<byte> payload, CancellationTokenSource attempt)
+    {
+        try
+        {
+            var reply = await client.SolveAsync(payload, attempt.Token).ConfigureAwait(false);
+            var frame = ZwiftConstants.CreateUnlockReply(reply);
+            Task<GattCommunicationStatus> write;
+            lock (_frameLock)
+            {
+                if (_disposed || _unlockAttempt != attempt || _syncRx != rx || _unlockClient?.Invoke() != client
+                    || ConnectionStatus != BluetoothConnectionStatus.Connected)
+                {
+                    return;
+                }
+
+                attempt.Token.ThrowIfCancellationRequested();
+                write = rx.WriteValueAsync(frame.AsBuffer(), SyncRxWriteOption(rx)).AsTask(attempt.Token);
+            }
+
+            var status = await write.ConfigureAwait(false);
+            var sent = status == GattCommunicationStatus.Success;
+            LogUnlockResult(attempt, sent, sent ? $"Signed unlock reply sent to SyncRx ({frame.Length}B)."
+                : $"Could not write the signed unlock reply to SyncRx ({status}).");
+        }
+        catch (Exception ex)
+        {
+            var warning = ex switch
+            {
+                UnauthorizedAccessException or HttpRequestException { StatusCode: HttpStatusCode.Unauthorized }
+                    => "Zwift session rejected. Sign in to Zwift again.",
+                HttpRequestException { StatusCode: { } status } => $"Zwift unlock request failed (HTTP {(int)status}).",
+                OperationCanceledException => "Zwift unlock attempt timed out.",
+                _ => $"Zwift unlock attempt failed ({ex.GetType().Name}).",
+            };
+            LogUnlockResult(attempt, success: false, warning);
+        }
+        finally
+        {
+            lock (_frameLock)
+            {
+                if (_unlockAttempt == attempt)
+                {
+                    _unlockAttempt = null;
+                    _pendingUnlockChallenge = default;
+                }
+
+                attempt.Dispose();
+            }
+        }
+    }
+
+    private void LogUnlockResult(CancellationTokenSource attempt, bool success, string message)
+    {
+        lock (_frameLock)
+        {
+            if (_unlockAttempt != attempt || _disposed)
+            {
+                return;
+            }
+
+            if (success)
+            {
+                _log.Event(Tag, message);
+            }
+            else
+            {
+                _log.Warn(Tag, message);
+            }
+        }
+    }
+
+    private void CancelUnlock()
+    {
+        var attempt = _unlockAttempt;
+        _unlockAttempt = null;
+        _pendingUnlockChallenge = default;
+        attempt?.Cancel();
     }
 
     private void SetBattery(int percent)
@@ -359,8 +487,18 @@ public sealed class ZwiftController : IDisposable
 
     private void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
     {
+        if (_disposed || sender != _device)
+        {
+            return;
+        }
+
         if (sender.ConnectionStatus == BluetoothConnectionStatus.Disconnected)
         {
+            lock (_frameLock)
+            {
+                CancelUnlock();
+            }
+
             _log.Warn(Tag, "Disconnected.");
             SetReady(false);
         }
@@ -376,18 +514,27 @@ public sealed class ZwiftController : IDisposable
 
     private void ReleaseGatt()
     {
+        GattCharacteristic? asyncCharacteristic;
+        GattCharacteristic? syncTx;
+        lock (_frameLock)
+        {
+            CancelUnlock();
+            asyncCharacteristic = _async;
+            syncTx = _syncTx;
+            _async = _syncRx = _syncTx = null;
+        }
+
         SetReady(false);
-        if (_async is not null)
+        if (asyncCharacteristic is not null)
         {
-            _async.ValueChanged -= OnAsyncValueChanged;
+            asyncCharacteristic.ValueChanged -= OnAsyncValueChanged;
         }
 
-        if (_syncTx is not null)
+        if (syncTx is not null)
         {
-            _syncTx.ValueChanged -= OnSyncTxValueChanged;
+            syncTx.ValueChanged -= OnSyncTxValueChanged;
         }
 
-        _async = _syncRx = _syncTx = null;
         foreach (var service in _services)
         {
             service.Dispose();

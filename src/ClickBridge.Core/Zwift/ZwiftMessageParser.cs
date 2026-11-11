@@ -23,6 +23,11 @@ public static class ZwiftMessageParser
                 return new RideOnResponse(raw, header, payload);
             }
 
+            if (frame.Length > ZwiftConstants.UnlockChallengeHeader.Length && frame.StartsWith(ZwiftConstants.UnlockChallengeHeader))
+            {
+                return new UnlockChallenge(raw);
+            }
+
             var body = frame[1..];
             return frame[0] switch
             {
