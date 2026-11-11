@@ -1,6 +1,3 @@
-using System.Collections.Concurrent;
-using System.Globalization;
-using System.Net;
 using ClickBridge.Ble;
 using ClickBridge.Core.Config;
 using ClickBridge.Core.Logging;
@@ -8,6 +5,9 @@ using ClickBridge.Core.Mapping;
 using ClickBridge.Core.Obc;
 using ClickBridge.Core.Zwift;
 using ClickBridge.Obc;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net;
 
 namespace ClickBridge.Hosting;
 

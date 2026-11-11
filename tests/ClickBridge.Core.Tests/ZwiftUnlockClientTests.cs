@@ -1,6 +1,6 @@
+using ClickBridge.Core.Zwift;
 using System.Net;
 using System.Text;
-using ClickBridge.Core.Zwift;
 
 namespace ClickBridge.Core.Tests;
 
