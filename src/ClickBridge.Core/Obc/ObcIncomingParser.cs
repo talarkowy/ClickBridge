@@ -1,5 +1,5 @@
-using System.Text;
 using ClickBridge.Core.Zwift;
+using System.Text;
 
 namespace ClickBridge.Core.Obc;
 

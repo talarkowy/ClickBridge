@@ -1,8 +1,8 @@
-using System.Net;
-using System.Net.Sockets;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Obc;
 using ClickBridge.Obc;
+using System.Net;
+using System.Net.Sockets;
 
 namespace ClickBridge.Core.Tests;
 

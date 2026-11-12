@@ -1,7 +1,7 @@
-using System.Runtime.InteropServices.WindowsRuntime;
-using System.Text;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Zwift;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text;
 using Windows.Security.Cryptography.DataProtection;
 
 namespace ClickBridge.Hosting;

@@ -1,5 +1,5 @@
-using System.Text;
 using ClickBridge.Hosting;
+using System.Text;
 
 namespace ClickBridge.App;
 

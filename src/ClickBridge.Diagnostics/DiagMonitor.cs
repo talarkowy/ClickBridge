@@ -1,7 +1,7 @@
-using System.Globalization;
 using ClickBridge.Ble;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Zwift;
+using System.Globalization;
 
 namespace ClickBridge.Diagnostics;
 

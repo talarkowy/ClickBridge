@@ -1,8 +1,8 @@
-using System.Net.Sockets;
-using System.Threading.Channels;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Obc;
 using ClickBridge.Core.Zwift;
+using System.Net.Sockets;
+using System.Threading.Channels;
 
 namespace ClickBridge.Obc;
 
