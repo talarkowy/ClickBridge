@@ -15,11 +15,16 @@ internal sealed class AccountWindow : Form
     private readonly Button _signIn = new() { Text = "Zaloguj się", AutoSize = true };
     private readonly Button _signOut = new() { Text = "Wyloguj się", AutoSize = true };
     private readonly Label _sessionStatus = CreateLabel(string.Empty);
-    private readonly Label _feedback = CreateLabel(string.Empty);
+    private readonly Label _feedback = new() { AutoSize = true, Dock = DockStyle.Top, Visible = false };
     private readonly Label _bridgeStatus = CreateLabel(string.Empty);
     private readonly ComboBox _mode = new() { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Tryb pracy" };
     private readonly Button _applyMode = new() { Text = "Zastosuj tryb", AutoSize = true };
     private readonly Label _modeHint = CreateLabel(string.Empty);
+    private readonly TableLayoutPanel _layout;
+
+    /// <summary>Display names indexed by <see cref="BridgeMode"/>; shared by the window and the tray menu.</summary>
+    public static readonly string[] ModeNames =
+        ["Oba kontrolery — konto Zwift", "Tylko prawy kontroler", "Oba bez konta — reset lewego (eksperymentalny)"];
 
     public AccountWindow(Icon icon)
     {
@@ -31,12 +36,11 @@ internal sealed class AccountWindow : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(500, 450);
+        ClientSize = new Size(500, 450); // the height is fitted to the content in FitHeight
 
-        var layout = new TableLayoutPanel
+        var layout = _layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            AutoScroll = true,
             ColumnCount = 1,
             Padding = new Padding(20, 16, 20, 12),
         };
@@ -44,7 +48,7 @@ internal sealed class AccountWindow : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
         buttons.Controls.AddRange([_signIn, _signOut]);
 
-        _mode.Items.AddRange(["Oba kontrolery — konto Zwift", "Tylko prawy kontroler", "Oba bez konta — reset lewego (eksperymentalny)"]);
+        _mode.Items.AddRange(ModeNames);
         _mode.SelectedIndex = 0;
         Add(CreateLabel("Tryb pracy"), 0);
         Add(_mode, 4);
@@ -110,6 +114,7 @@ internal sealed class AccountWindow : Form
         _password.Enabled = editingEnabled && activeMode == BridgeMode.Auto;
         _signIn.Enabled = editingEnabled && activeMode == BridgeMode.Auto;
         _signOut.Enabled = editingEnabled && canSignOut;
+        FitHeight();
     }
 
     public void ShowFeedback(string message, bool error = false)
@@ -117,6 +122,29 @@ internal sealed class AccountWindow : Form
         _feedback.ForeColor = error && !SystemInformation.HighContrast ? Color.Firebrick : SystemColors.ControlText;
         _feedback.Text = message;
         _feedback.Visible = message.Length > 0;
+        FitHeight();
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        FitHeight(); // after DPI scaling of the initial size
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        FitHeight();
+    }
+
+    /// <summary>Sizes the window to its content, so it grows only when a hint or message needs more lines.</summary>
+    private void FitHeight()
+    {
+        var height = _layout.GetPreferredSize(new Size(ClientSize.Width, 0)).Height;
+        if (height != ClientSize.Height)
+        {
+            ClientSize = new Size(ClientSize.Width, height);
+        }
     }
 
     private static Label CreateLabel(string text) => new() { Text = text, AutoSize = true, Dock = DockStyle.Top };
