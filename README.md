@@ -150,3 +150,9 @@ dotnet run --project src/ClickBridge.Diagnostics
 Opcje: `--scan-only`, `--no-handshake`, `--side left|right`, `--log-dir <ścieżka>`, `--summary <sekundy>`.
 Klawisze w trakcie: `S` podsumowanie, `M` znacznik w logu, `H` ponowny `RideOn`, `R` wymuszone ponowne połączenie, `Q` wyjście.
 Pełny log (także ramki "idle" i powtórzenia) trafia do `logs/click-diag-*.log`.
+
+## Licencja
+
+[MIT](LICENSE) © 2026 Paweł Talarek. Pliki EXE z wydań zawierają środowisko .NET na licencji MIT — szczegóły w [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Projekt nie jest powiązany z Zwift, MyWhoosh ani OpenBikeControl. Nazwy i znaki towarowe należą do ich właścicieli.

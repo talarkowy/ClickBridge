@@ -5,5 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <Deterministic>true</Deterministic>
+    <Product>ClickBridge</Product>
+    <Authors>Paweł Talarek</Authors>
+    <Copyright>Copyright (c) 2026 Paweł Talarek</Copyright>
   </PropertyGroup>
 </Project>
