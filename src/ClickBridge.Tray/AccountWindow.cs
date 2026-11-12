@@ -21,6 +21,10 @@ internal sealed class AccountWindow : Form
     private readonly Button _applyMode = new() { Text = "Zastosuj tryb", AutoSize = true };
     private readonly Label _modeHint = CreateLabel(string.Empty);
 
+    /// <summary>Display names indexed by <see cref="BridgeMode"/>; shared by the window and the tray menu.</summary>
+    public static readonly string[] ModeNames =
+        ["Oba kontrolery — konto Zwift", "Tylko prawy kontroler", "Oba bez konta — reset lewego (eksperymentalny)"];
+
     public AccountWindow(Icon icon)
     {
         Text = "ClickBridge";
@@ -44,7 +48,7 @@ internal sealed class AccountWindow : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
         buttons.Controls.AddRange([_signIn, _signOut]);
 
-        _mode.Items.AddRange(["Oba kontrolery — konto Zwift", "Tylko prawy kontroler", "Oba bez konta — reset lewego (eksperymentalny)"]);
+        _mode.Items.AddRange(ModeNames);
         _mode.SelectedIndex = 0;
         Add(CreateLabel("Tryb pracy"), 0);
         Add(_mode, 4);

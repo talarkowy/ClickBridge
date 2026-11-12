@@ -17,6 +17,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly ContextMenuStrip _menu = new();
     private readonly ToolStripItem _reconnect;
+    private readonly ToolStripMenuItem[] _modeItems;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
     private readonly CancellationTokenSource _shutdown;
     private readonly Task<bool> _startup;
@@ -34,7 +35,7 @@ internal sealed class TrayApplication : ApplicationContext
         _bridge = new BridgeHost(config, log, account);
         _window = new AccountWindow(icon);
         _window.SelectedMode = config.Mode;
-        _window.ModeChangeRequested += async (_, _) => await ChangeModeAsync();
+        _window.ModeChangeRequested += async (_, _) => await ChangeModeAsync(_window.SelectedMode);
         _window.SignInRequested += async (_, _) => await SignInAsync();
         _window.SignOutRequested += async (_, _) => await RunAsync(() =>
         {
@@ -68,6 +69,14 @@ internal sealed class TrayApplication : ApplicationContext
                 return "Ponowiono połączenie. Naciśnij przycisk na Clicku, aby go wybudzić.";
             });
         });
+        _menu.Items.Add(new ToolStripSeparator());
+        _modeItems = Enum.GetValues<BridgeMode>().Select(mode =>
+        {
+            var item = new ToolStripMenuItem(AccountWindow.ModeNames[(int)mode]);
+            item.Click += async (_, _) => await SelectModeFromMenuAsync(mode);
+            return item;
+        }).ToArray();
+        _menu.Items.AddRange(_modeItems);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Zakończ", null, (_, _) => ExitThread());
 
@@ -128,11 +137,31 @@ internal sealed class TrayApplication : ApplicationContext
         _window.Activate();
     }
 
-    private Task ChangeModeAsync()
+    private async Task SelectModeFromMenuAsync(BridgeMode mode)
     {
-        var selected = _window.SelectedMode;
+        if (mode == _config.Mode && _bridgeRunning)
+        {
+            return;
+        }
+
+        if (await ChangeModeAsync(mode) is not { } outcome || !CanUpdateUi)
+        {
+            return;
+        }
+
+        if (!outcome.Error && mode == BridgeMode.Auto && _account.Client is not { HasSession: true })
+        {
+            OpenWindow(); // the window shows the outcome next to the sign-in form
+            return;
+        }
+
+        _icon.ShowBalloonTip(5000, "ClickBridge", outcome.Message, outcome.Error ? ToolTipIcon.Error : ToolTipIcon.Info);
+    }
+
+    private async Task<Outcome?> ChangeModeAsync(BridgeMode selected)
+    {
         _window.TakePassword();
-        return RunAsync(async () =>
+        var outcome = await RunAsync(async () =>
         {
             if (selected == _config.Mode && _bridgeRunning)
             {
@@ -163,8 +192,14 @@ internal sealed class TrayApplication : ApplicationContext
 
             await _bridge.StartAsync().ConfigureAwait(false);
             _bridgeRunning = true;
-            return "Zapisano i włączono tryb. Wybudź kontrolery; w razie potrzeby połącz MyWhoosh ponownie.";
+            return $"Włączono tryb „{AccountWindow.ModeNames[(int)selected]}”. Wybudź kontrolery; w razie potrzeby połącz MyWhoosh ponownie.";
         }, "Zmienianie trybu…");
+        if (CanUpdateUi)
+        {
+            _window.SelectedMode = _config.Mode; // keep the window list in sync with the menu and with a failed save
+        }
+
+        return outcome;
     }
 
     private Task SignInAsync()
@@ -198,11 +233,14 @@ internal sealed class TrayApplication : ApplicationContext
         }, "Logowanie do Zwift…");
     }
 
-    private async Task RunAsync(Func<Task<string>> action, string pendingMessage = "")
+    private readonly record struct Outcome(string Message, bool Error);
+
+    /// <summary>Runs one UI operation at a time; returns null when the operation was not started or the UI is gone.</summary>
+    private async Task<Outcome?> RunAsync(Func<Task<string>> action, string pendingMessage = "")
     {
         if (!_startup.IsCompleted || _operation is not null || !CanUpdateUi)
         {
-            return;
+            return null;
         }
 
         _window.ShowFeedback(pendingMessage);
@@ -211,16 +249,19 @@ internal sealed class TrayApplication : ApplicationContext
             _operation = action();
             RefreshStatus();
             var message = await _operation;
-            if (CanUpdateUi)
+            if (!CanUpdateUi)
             {
-                _window.ShowFeedback(message);
+                return null;
             }
+
+            _window.ShowFeedback(message);
+            return new Outcome(message, Error: false);
         }
         catch (Exception ex)
         {
             if (!CanUpdateUi)
             {
-                return;
+                return null;
             }
 
             var message = ex switch
@@ -233,6 +274,7 @@ internal sealed class TrayApplication : ApplicationContext
             };
             _log.Warn("TRAY", $"Operation failed ({ex.GetType().Name}).");
             _window.ShowFeedback(message, error: true);
+            return new Outcome(message, Error: true);
         }
         finally
         {
@@ -265,6 +307,11 @@ internal sealed class TrayApplication : ApplicationContext
         var available = _startup.IsCompleted && _operation is null;
         _window.UpdateStatus(sessionStatus, bridgeStatus, available, client is not null, _config.Mode);
         _reconnect.Enabled = available && BridgeStarted && _bridge.BluetoothAvailable;
+        foreach (var mode in Enum.GetValues<BridgeMode>())
+        {
+            _modeItems[(int)mode].Checked = mode == _config.Mode;
+            _modeItems[(int)mode].Enabled = available;
+        }
     }
 
     private string ControllerStatus() => !_bridge.BluetoothAvailable ? "Bluetooth niedostępny"
