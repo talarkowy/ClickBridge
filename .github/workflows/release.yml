@@ -59,8 +59,8 @@ jobs:
         run: |
           # Files are listed explicitly so an unexpected file in a publish folder never ends up in the release.
           $packages = [ordered]@{
-            tray    = @('publish/tray/clickbridge-tray.exe', 'publish/tray/clickbridge.example.json')
-            console = @('publish/console/clickbridge.exe', 'publish/console/clickbridge.example.json')
+            tray    = @('publish/tray/clickbridge-tray.exe', 'publish/tray/clickbridge.example.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md')
+            console = @('publish/console/clickbridge.exe', 'publish/console/clickbridge.example.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md')
           }
           New-Item -ItemType Directory dist | Out-Null
           $hashed = foreach ($name in $packages.Keys) {
