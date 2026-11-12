@@ -19,6 +19,9 @@ public sealed class BridgeConfig
 
     public BridgeMode Mode { get; set; } = BridgeMode.Auto;
 
+    /// <summary>Maximum session length before resetting the left puck in OfflineReset mode.</summary>
+    public int OfflineResetSeconds { get; set; } = 55;
+
     /// <summary>Advertise the service over mDNS (otherwise the app cannot discover it).</summary>
     public bool Mdns { get; set; } = true;
 
@@ -42,14 +45,36 @@ public sealed class BridgeConfig
         Converters = { new JsonStringEnumConverter() },
     };
 
+    private static readonly JsonSerializerOptions WriteJsonOptions = new(JsonOptions) { WriteIndented = true };
+
     public static BridgeConfig Parse(string json) =>
         JsonSerializer.Deserialize<BridgeConfig>(json, JsonOptions) ?? new BridgeConfig();
 
     public static BridgeConfig Load(string path) => Parse(File.ReadAllText(path));
 
+    public void Save(string path)
+    {
+        _ = BuildMapping();
+        var fullPath = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporary = fullPath + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(this, WriteJsonOptions));
+        File.Move(temporary, fullPath, overwrite: true);
+    }
+
     /// <summary>Default mapping for <see cref="Mode"/> plus the overrides from <see cref="Mapping"/>.</summary>
     public ButtonMapping BuildMapping()
     {
+        if (!Enum.IsDefined(Mode))
+        {
+            throw new FormatException($"Unknown bridge mode '{Mode}'.");
+        }
+
+        if (OfflineResetSeconds is < 10 or > 60)
+        {
+            throw new FormatException("offlineResetSeconds must be between 10 and 60.");
+        }
+
         var mapping = ButtonMapping.Default(Mode);
         foreach (var (buttonName, target) in Mapping ?? [])
         {

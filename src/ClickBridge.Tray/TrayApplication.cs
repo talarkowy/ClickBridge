@@ -1,5 +1,6 @@
 using ClickBridge.Core.Config;
 using ClickBridge.Core.Logging;
+using ClickBridge.Core.Mapping;
 using ClickBridge.Hosting;
 
 namespace ClickBridge.Tray;
@@ -8,7 +9,10 @@ internal sealed class TrayApplication : ApplicationContext
 {
     private readonly ZwiftAccount _account;
     private readonly IBridgeLog _log;
-    private readonly BridgeHost _bridge;
+    private BridgeHost _bridge;
+    private readonly BridgeConfig _config;
+    private readonly string _configPath;
+    private bool _bridgeRunning;
     private readonly AccountWindow _window;
     private readonly NotifyIcon _icon;
     private readonly ContextMenuStrip _menu = new();
@@ -19,14 +23,18 @@ internal sealed class TrayApplication : ApplicationContext
     private Task<string>? _operation;
     private bool _uiDisposed;
 
-    public TrayApplication(BridgeConfig config, ZwiftAccount account, IBridgeLog log, Icon icon,
+    public TrayApplication(BridgeConfig config, string configPath, ZwiftAccount account, IBridgeLog log, Icon icon,
         EventWaitHandle openRequested, CancellationTokenSource shutdown)
     {
         _account = account;
         _log = log;
         _shutdown = shutdown;
+        _config = config;
+        _configPath = configPath;
         _bridge = new BridgeHost(config, log, account);
         _window = new AccountWindow(icon);
+        _window.SelectedMode = config.Mode;
+        _window.ModeChangeRequested += async (_, _) => await ChangeModeAsync();
         _window.SignInRequested += async (_, _) => await SignInAsync();
         _window.SignOutRequested += async (_, _) => await RunAsync(() =>
         {
@@ -93,13 +101,17 @@ internal sealed class TrayApplication : ApplicationContext
     {
         try
         {
-            await _account.LoadAsync().ConfigureAwait(false);
+            if (_config.Mode == BridgeMode.Auto)
+            {
+                await _account.LoadAsync().ConfigureAwait(false);
+            }
             if (_shutdown.IsCancellationRequested)
             {
                 return false;
             }
 
             await _bridge.StartAsync().ConfigureAwait(false);
+            _bridgeRunning = true;
             return true;
         }
         catch (Exception ex)
@@ -114,6 +126,45 @@ internal sealed class TrayApplication : ApplicationContext
         RefreshStatus();
         _window.Show();
         _window.Activate();
+    }
+
+    private Task ChangeModeAsync()
+    {
+        var selected = _window.SelectedMode;
+        _window.TakePassword();
+        return RunAsync(async () =>
+        {
+            if (selected == _config.Mode && _bridgeRunning)
+            {
+                return "Ten tryb jest już aktywny.";
+            }
+
+            var previous = _config.Mode;
+            _config.Mode = selected;
+            try { _config.Save(_configPath); }
+            catch
+            {
+                _config.Mode = previous;
+                throw;
+            }
+
+            _bridgeRunning = false;
+            await _bridge.DisposeAsync().ConfigureAwait(false);
+            _bridge = new BridgeHost(_config, _log, _account);
+            if (_shutdown.IsCancellationRequested)
+            {
+                return string.Empty;
+            }
+
+            if (selected == BridgeMode.Auto && _account.Client is null)
+            {
+                await _account.LoadAsync().ConfigureAwait(false);
+            }
+
+            await _bridge.StartAsync().ConfigureAwait(false);
+            _bridgeRunning = true;
+            return "Zapisano i włączono tryb. Wybudź kontrolery; w razie potrzeby połącz MyWhoosh ponownie.";
+        }, "Zmienianie trybu…");
     }
 
     private Task SignInAsync()
@@ -195,13 +246,14 @@ internal sealed class TrayApplication : ApplicationContext
 
     private bool CanUpdateUi => !_uiDisposed && !_shutdown.IsCancellationRequested;
 
-    private bool BridgeStarted => _startup.IsCompletedSuccessfully && _startup.Result;
+    private bool BridgeStarted => _bridgeRunning;
 
     private void RefreshStatus()
     {
         var client = _account.Client;
         var sessionStatus = client switch
         {
+            _ when _config.Mode != BridgeMode.Auto => "Konto Zwift nie jest używane w tym trybie.",
             { HasSession: true } => "Konto Zwift · sesja dostępna",
             not null => "Sesja Zwift wygasła. Zaloguj się ponownie.",
             _ when !_startup.IsCompleted => "Wczytywanie sesji Zwift…",
@@ -211,7 +263,7 @@ internal sealed class TrayApplication : ApplicationContext
             : !BridgeStarted ? "Błąd uruchamiania mostka. Sprawdź log ClickBridge."
             : $"Click: {ControllerStatus()}\nMyWhoosh: {(_bridge.TrainingAppConnected ? "połączony" : "oczekuje na połączenie")}";
         var available = _startup.IsCompleted && _operation is null;
-        _window.UpdateStatus(sessionStatus, bridgeStatus, available, client is not null);
+        _window.UpdateStatus(sessionStatus, bridgeStatus, available, client is not null, _config.Mode);
         _reconnect.Enabled = available && BridgeStarted && _bridge.BluetoothAvailable;
     }
 

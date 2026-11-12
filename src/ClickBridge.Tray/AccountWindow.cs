@@ -1,3 +1,5 @@
+using ClickBridge.Core.Mapping;
+
 namespace ClickBridge.Tray;
 
 internal sealed class AccountWindow : Form
@@ -15,6 +17,9 @@ internal sealed class AccountWindow : Form
     private readonly Label _sessionStatus = CreateLabel(string.Empty);
     private readonly Label _feedback = CreateLabel(string.Empty);
     private readonly Label _bridgeStatus = CreateLabel(string.Empty);
+    private readonly ComboBox _mode = new() { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Tryb pracy" };
+    private readonly Button _applyMode = new() { Text = "Zastosuj tryb", AutoSize = true };
+    private readonly Label _modeHint = CreateLabel(string.Empty);
 
     public AccountWindow(Icon icon)
     {
@@ -26,7 +31,7 @@ internal sealed class AccountWindow : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(448, 306);
+        ClientSize = new Size(500, 450);
 
         var layout = new TableLayoutPanel
         {
@@ -39,7 +44,13 @@ internal sealed class AccountWindow : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
         buttons.Controls.AddRange([_signIn, _signOut]);
 
-        Add(_sessionStatus, 0);
+        _mode.Items.AddRange(["Oba kontrolery — konto Zwift", "Tylko prawy kontroler", "Oba bez konta — reset lewego (eksperymentalny)"]);
+        _mode.SelectedIndex = 0;
+        Add(CreateLabel("Tryb pracy"), 0);
+        Add(_mode, 4);
+        Add(_applyMode, 6);
+        Add(_modeHint, 4);
+        Add(_sessionStatus, 12);
         Add(CreateLabel("E-&mail Zwift"), 12);
         Add(_email, 2);
         Add(CreateLabel("&Hasło Zwift"), 8);
@@ -52,6 +63,7 @@ internal sealed class AccountWindow : Form
         ActiveControl = _email;
         _signIn.Click += (_, _) => SignInRequested?.Invoke(this, EventArgs.Empty);
         _signOut.Click += (_, _) => SignOutRequested?.Invoke(this, EventArgs.Empty);
+        _applyMode.Click += (_, _) => ModeChangeRequested?.Invoke(this, EventArgs.Empty);
 
         void Add(Control control, int spaceAbove)
         {
@@ -64,6 +76,14 @@ internal sealed class AccountWindow : Form
 
     public event EventHandler? SignInRequested;
     public event EventHandler? SignOutRequested;
+    public event EventHandler? ModeChangeRequested;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public BridgeMode SelectedMode
+    {
+        get => (BridgeMode)_mode.SelectedIndex;
+        set => _mode.SelectedIndex = (int)value;
+    }
 
     public string Email => _email.Text.Trim();
 
@@ -74,13 +94,21 @@ internal sealed class AccountWindow : Form
         return password;
     }
 
-    public void UpdateStatus(string sessionStatus, string bridgeStatus, bool editingEnabled, bool canSignOut)
+    public void UpdateStatus(string sessionStatus, string bridgeStatus, bool editingEnabled, bool canSignOut, BridgeMode activeMode)
     {
         _sessionStatus.Text = sessionStatus;
         _bridgeStatus.Text = bridgeStatus;
-        _email.Enabled = editingEnabled;
-        _password.Enabled = editingEnabled;
-        _signIn.Enabled = editingEnabled;
+        _mode.Enabled = editingEnabled;
+        _applyMode.Enabled = editingEnabled;
+        _modeHint.Text = activeMode switch
+        {
+            BridgeMode.OfflineReset => "Aktywny reset lewego bez konta Zwift.\nPodczas restartu oba kontrolery mogą nie reagować.",
+            BridgeMode.RightOnly => "Aktywny tylko prawy kontroler. + zwiększa bieg, B zmniejsza.",
+            _ => "Aktywny tryb konta Zwift z automatyczną autoryzacją.",
+        };
+        _email.Enabled = editingEnabled && activeMode == BridgeMode.Auto;
+        _password.Enabled = editingEnabled && activeMode == BridgeMode.Auto;
+        _signIn.Enabled = editingEnabled && activeMode == BridgeMode.Auto;
         _signOut.Enabled = editingEnabled && canSignOut;
     }
 

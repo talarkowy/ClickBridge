@@ -44,7 +44,8 @@ public sealed class ZwiftUnlockClient(
         return session.RefreshToken;
     }
 
-    public async Task<byte[]> SolveAsync(ReadOnlyMemory<byte> challenge, CancellationToken cancellationToken)
+    /// <returns>The signed reply, or <see langword="null"/> if Zwift returns HTTP 204.</returns>
+    public async Task<byte[]?> SolveAsync(ReadOnlyMemory<byte> challenge, CancellationToken cancellationToken)
     {
         var session = await GetSessionAsync(rejectedAccessToken: null, cancellationToken).ConfigureAwait(false);
         try
@@ -143,7 +144,7 @@ public sealed class ZwiftUnlockClient(
         return new Session(tokens.AccessToken, nextRefreshToken, DateTimeOffset.UtcNow.AddSeconds(tokens.ExpiresIn));
     }
 
-    private async Task<byte[]> RequestReplyAsync(
+    private async Task<byte[]?> RequestReplyAsync(
         ReadOnlyMemory<byte> challenge, string accessToken, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, UnlockUri)
@@ -155,6 +156,11 @@ public sealed class ZwiftUnlockClient(
         request.Content.Headers.ContentType = new MediaTypeHeaderValue(Protobuf);
 
         using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NoContent)
+        {
+            return null;
+        }
+
         if (response.StatusCode != HttpStatusCode.OK)
         {
             throw new HttpRequestException("Zwift unlock request failed.", null, response.StatusCode);
