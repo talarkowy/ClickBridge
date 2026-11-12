@@ -1,6 +1,8 @@
 using ClickBridge.Core.Mapping;
 using ClickBridge.Core.Obc;
 using ClickBridge.Core.Zwift;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -37,6 +39,12 @@ public sealed class BridgeConfig
     /// </summary>
     public Dictionary<string, string>? Mapping { get; set; }
 
+    /// <summary>
+    /// Bluetooth addresses of the controllers the bridge may connect to, e.g. <c>["AA:BB:CC:DD:EE:FF"]</c>.
+    /// Empty = any device that advertises as a Zwift controller.
+    /// </summary>
+    public List<string>? AllowedControllers { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -55,19 +63,107 @@ public sealed class BridgeConfig
     public void Save(string path)
     {
         _ = BuildMapping();
+        WriteAtomically(path, JsonSerializer.Serialize(this, WriteJsonOptions));
+    }
+
+    /// <summary>
+    /// Saves only <see cref="Mode"/>. An existing file keeps its comments, layout and other settings;
+    /// the whole configuration is written when there is no file or it has no "mode" entry.
+    /// </summary>
+    public void SaveMode(string path)
+    {
+        _ = BuildMapping();
+        if (File.Exists(path) && ReplaceMode(File.ReadAllBytes(path), Mode) is { } updated)
+        {
+            WriteAtomically(path, updated);
+        }
+        else
+        {
+            Save(path);
+        }
+    }
+
+    /// <summary>Returns the JSON text with the top-level "mode" value replaced, or null if there is none.</summary>
+    internal static string? ReplaceMode(ReadOnlySpan<byte> utf8Json, BridgeMode mode)
+    {
+        if (utf8Json.StartsWith(Encoding.UTF8.Preamble))
+        {
+            utf8Json = utf8Json[Encoding.UTF8.Preamble.Length..];
+        }
+
+        var reader = new Utf8JsonReader(utf8Json, new JsonReaderOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.CurrentDepth != 1 || reader.TokenType != JsonTokenType.PropertyName
+                    || !string.Equals(reader.GetString(), nameof(Mode), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!reader.Read() || reader.TokenType is not (JsonTokenType.String or JsonTokenType.Number))
+                {
+                    return null;
+                }
+
+                var start = (int)reader.TokenStartIndex;
+                var end = (int)reader.BytesConsumed;
+                return Encoding.UTF8.GetString(utf8Json[..start])
+                       + JsonSerializer.Serialize(mode.ToString())
+                       + Encoding.UTF8.GetString(utf8Json[end..]);
+            }
+        }
+        catch (JsonException)
+        {
+            // not valid JSON: let the caller rewrite the file
+        }
+
+        return null;
+    }
+
+    private static void WriteAtomically(string path, string contents)
+    {
         var fullPath = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         var temporary = fullPath + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(this, WriteJsonOptions));
+        File.WriteAllText(temporary, contents);
         File.Move(temporary, fullPath, overwrite: true);
     }
 
-    /// <summary>Default mapping for <see cref="Mode"/> plus the overrides from <see cref="Mapping"/>.</summary>
-    public ButtonMapping BuildMapping()
+    /// <summary>Parsed <see cref="AllowedControllers"/>; empty when every Zwift controller is accepted.</summary>
+    public IReadOnlySet<ulong> ParseAllowedControllers()
+    {
+        var result = new HashSet<ulong>();
+        foreach (var text in AllowedControllers ?? [])
+        {
+            var hex = text.Replace(":", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).Trim();
+            if (hex.Length != 12 || !ulong.TryParse(hex, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var address))
+            {
+                throw new FormatException($"Invalid Bluetooth address '{text}' in allowedControllers (expected AA:BB:CC:DD:EE:FF).");
+            }
+
+            result.Add(address);
+        }
+
+        return result;
+    }
+
+    /// <summary>Checks every setting; throws <see cref="FormatException"/> with a readable message.</summary>
+    public void Validate()
     {
         if (!Enum.IsDefined(Mode))
         {
             throw new FormatException($"Unknown bridge mode '{Mode}'.");
+        }
+
+        if (Port is < 0 or > 65535)
+        {
+            throw new FormatException("port must be between 0 and 65535.");
         }
 
         if (OfflineResetSeconds is < 10 or > 60)
@@ -75,6 +171,24 @@ public sealed class BridgeConfig
             throw new FormatException("offlineResetSeconds must be between 10 and 60.");
         }
 
+        if (StatusIntervalSeconds is < 0 or > 86400)
+        {
+            throw new FormatException("statusIntervalSeconds must be between 0 and 86400.");
+        }
+
+        if (string.IsNullOrWhiteSpace(DeviceName) || DeviceName.Contains('.', StringComparison.Ordinal)
+            || DeviceName.Any(char.IsControl) || Encoding.UTF8.GetByteCount(DeviceName) > 63)
+        {
+            throw new FormatException("deviceName must be 1-63 bytes long, without dots or control characters.");
+        }
+
+        _ = ParseAllowedControllers();
+    }
+
+    /// <summary>Default mapping for <see cref="Mode"/> plus the overrides from <see cref="Mapping"/>.</summary>
+    public ButtonMapping BuildMapping()
+    {
+        Validate();
         var mapping = ButtonMapping.Default(Mode);
         foreach (var (buttonName, target) in Mapping ?? [])
         {

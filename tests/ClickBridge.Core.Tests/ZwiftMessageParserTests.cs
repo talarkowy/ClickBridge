@@ -4,6 +4,17 @@ namespace ClickBridge.Core.Tests;
 
 public class ZwiftMessageParserTests
 {
+    [Fact]
+    public void Parse_HugeDeclaredLength_IsMalformedNotAnException()
+    {
+        // field 3, length-delimited, length 0x7FFFFFFF: position + length used to overflow.
+        var message = ZwiftMessageParser.Parse([0x23, 0x1A, 0xFF, 0xFF, 0xFF, 0xFF, 0x07]);
+
+        Assert.IsType<MalformedMessage>(message);
+        Assert.Equal("1A FF FF FF FF 07", ProtoDump.Format([0x1A, 0xFF, 0xFF, 0xFF, 0xFF, 0x07]));
+        Assert.Equal("1A 85 80 80 80 10", ProtoDump.Format([0x1A, 0x85, 0x80, 0x80, 0x80, 0x10])); // 2^32 + 5
+    }
+
     private static byte[] Varint(ulong value)
     {
         var bytes = new List<byte>();

@@ -53,11 +53,14 @@ internal ref struct ProtoReader(ReadOnlySpan<byte> data)
 
     public ReadOnlySpan<byte> ReadLengthDelimited()
     {
-        var length = (int)ReadVarint();
-        if (length < 0 || _pos + length > _data.Length)
+        // Compared as unsigned 64-bit: a huge length must not wrap around when cast or added to the position.
+        var declared = ReadVarint();
+        if (declared > (ulong)(_data.Length - _pos))
         {
             throw new FormatException("Truncated length-delimited field.");
         }
+
+        var length = (int)declared;
 
         var slice = _data.Slice(_pos, length);
         _pos += length;

@@ -5,6 +5,17 @@ namespace ClickBridge.Core.Tests;
 public class ObcProtocolTests
 {
     [Fact]
+    public void AppInfo_ControlCharactersFromTheNetworkAreReplaced()
+    {
+        var parser = new ObcIncomingParser();
+
+        var info = Assert.IsType<ObcAppInfo>(Assert.Single(parser.Append(ObcMessages.AppInfo("my\nwhoosh\u001b[31m", "1\r2", []))));
+
+        Assert.Equal("my?whoosh?[31m", info.AppId);
+        Assert.Equal("1?2", info.AppVersion);
+    }
+
+    [Fact]
     public void ButtonState_EncodesPairs()
     {
         var message = ObcMessages.ButtonState([ObcButtonState.Press(ObcButton.ShiftUp), ObcButtonState.Release(ObcButton.ShiftDown)]);

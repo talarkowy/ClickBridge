@@ -77,6 +77,72 @@ public class ClickV2ResetWatchdogTests
     }
 
     [Fact]
+    public void SavingModeKeepsCommentsAndLayoutOfAnExistingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"clickbridge-config-{Guid.NewGuid():N}.json");
+        try
+        {
+            const string original = """
+                {
+                  // "mode": "RightOnly" in a comment must stay untouched
+                  "port": 43210,
+                  "mapping": { "mode": "ignored-nested" },
+                  "Mode": "Auto", // trailing note
+                }
+                """;
+            File.WriteAllText(path, original);
+            var config = BridgeConfig.Parse("""{"port":43210}""");
+            config.Mode = BridgeMode.OfflineReset;
+            config.SaveMode(path);
+
+            Assert.Equal(original.Replace("\"Mode\": \"Auto\"", "\"Mode\": \"OfflineReset\"", StringComparison.Ordinal), File.ReadAllText(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SavingModeWritesTheWholeConfigWhenTheFileHasNoModeEntry()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"clickbridge-config-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """{ "port": 43210 }""");
+            var config = BridgeConfig.Load(path);
+            config.Mode = BridgeMode.RightOnly;
+            config.SaveMode(path);
+
+            var restored = BridgeConfig.Load(path);
+            Assert.Equal(BridgeMode.RightOnly, restored.Mode);
+            Assert.Equal(43210, restored.Port);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"port":70000}""")]
+    [InlineData("""{"port":-1}""")]
+    [InlineData("""{"deviceName":"a.b"}""")]
+    [InlineData("""{"allowedControllers":["not-an-address"]}""")]
+    public void InvalidSettingsAreRejected(string json)
+    {
+        Assert.Throws<FormatException>(() => BridgeConfig.Parse(json).BuildMapping());
+    }
+
+    [Fact]
+    public void AllowedControllersAcceptColonsAndDashes()
+    {
+        var config = BridgeConfig.Parse("""{"allowedControllers":["AA:BB:CC:DD:EE:FF","01-02-03-04-05-06"]}""");
+
+        Assert.Equal([0x010203040506UL, 0xAABBCCDDEEFFUL], config.ParseAllowedControllers().Order());
+    }
+
+    [Fact]
     public void SavingModePreservesOtherSettings()
     {
         var path = Path.Combine(Path.GetTempPath(), $"clickbridge-config-{Guid.NewGuid():N}.json");

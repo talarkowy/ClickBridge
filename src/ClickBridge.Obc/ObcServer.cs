@@ -15,6 +15,9 @@ public sealed class ObcServer : IAsyncDisposable
     private const string Tag = "OBC";
     private const int PortAttempts = 10;
 
+    /// <summary>Anyone on the LAN can connect, so the number of simultaneous apps is capped.</summary>
+    public const int MaxClients = 8;
+
     private readonly IBridgeLog _log;
     private readonly int _preferredPort;
     private readonly TimeSpan _statusInterval;
@@ -100,7 +103,7 @@ public sealed class ObcServer : IAsyncDisposable
     private TcpListener Bind()
     {
         var attempts = _preferredPort == 0 ? 1 : PortAttempts;
-        for (var i = 0; i < attempts; i++)
+        for (var i = 0; i < attempts && _preferredPort + i <= IPEndPoint.MaxPort; i++)
         {
             var port = _preferredPort == 0 ? 0 : _preferredPort + i;
             var listener = new TcpListener(IPAddress.Any, port);
@@ -140,6 +143,14 @@ public sealed class ObcServer : IAsyncDisposable
                 }
 
                 _log.Warn(Tag, $"Accept failed: {ex.Message}");
+                await Task.Delay(200, CancellationToken.None).ConfigureAwait(false); // no hot loop on a broken listener
+                continue;
+            }
+
+            if (_clients.Count >= MaxClients)
+            {
+                _log.Warn(Tag, $"Rejected a connection from {client.Client.RemoteEndPoint}: {MaxClients} apps are already connected.");
+                client.Dispose();
                 continue;
             }
 

@@ -41,7 +41,7 @@ Kliknij ikonę ClickBridge przy zegarze. Jeśli jej nie widać, rozwiń ukryte i
 
 Lista **Tryb pracy** pozwala wybrać konto Zwift, tylko prawy kontroler albo **Oba bez konta — reset lewego (eksperymentalny)**. Kliknij **Zastosuj tryb**, aby zapisać wybór i ponownie uruchomić mostek. Może być potrzebne ponowne połączenie MyWhoosh. Ustawienia trafiają do wczytanego `clickbridge.json`, a jeśli go nie było — do `%LOCALAPPDATA%\ClickBridge\clickbridge.json`. Przy uruchamianiu konfiguracja obok EXE ma pierwszeństwo przed konfiguracją z bieżącego katalogu, a ta przed konfiguracją użytkownika. Konsola może użyć pliku użytkownika przez `--config`.
 
-Zamknięcie okna `×` chowa formularz, a mostek działa dalej. Ponowne uruchomienie `clickbridge-tray.exe` otwiera okno działającej aplikacji. Prawym przyciskiem na ikonie otworzysz menu z ponownym połączeniem kontrolera i opcją **Zakończ**. Logi wersji z ikoną są w `%LOCALAPPDATA%\ClickBridge\logs`.
+Zamknięcie okna `×` chowa formularz, a mostek działa dalej. Ponowne uruchomienie `clickbridge-tray.exe` otwiera okno działającej aplikacji. Prawym przyciskiem na ikonie otworzysz menu z ponownym połączeniem kontrolera i opcją **Zakończ**. Logi wersji z ikoną są w `%LOCALAPPDATA%\ClickBridge\logs`; pliki starsze niż 30 dni są usuwane przy starcie. Logi zawierają adresy Bluetooth kontrolerów i adresy IP w sieci lokalnej — zamaskuj je, zanim udostępnisz log publicznie.
 
 ## clickbridge — mostek do MyWhoosh
 
@@ -69,7 +69,9 @@ Podaj e-mail i hasło do konta Zwift w konsoli. Hasło jest ukryte podczas wpisy
 
 Gdy lewy Click v2 wyśle wyzwanie BLE, mostek pobierze podpisaną odpowiedź z usługi Zwift i przekaże ją kontrolerowi. Wymaga to dostępu do internetu. Wpis `Signed unlock reply sent to SyncRx` oznacza udany zapis BLE. Działanie odblokowania sprawdzisz, naciskając lewy `−` także po upływie pierwszej minuty połączenia.
 
-Jeśli Zwift odrzuci zapisaną sesję, uruchom mostek ponownie z `--zwift-login`. Aby usunąć lokalną sesję, zamknij mostek i uruchom `dotnet run --project src/ClickBridge.App -- --zwift-logout`.
+Mostek loguje się tak jak gra Zwift (identyfikator klienta gry, e-mail i hasło). To nieoficjalne użycie konta — korzystasz z niego na własną odpowiedzialność wobec regulaminu Zwift.
+
+Jeśli Zwift odrzuci zapisaną sesję, mostek usuwa ją z dysku; uruchom go ponownie z `--zwift-login`. Aby usunąć lokalną sesję, zamknij mostek i uruchom `dotnet run --project src/ClickBridge.App -- --zwift-logout`.
 
 Format wymiany pochodzi z [implementacji Zwiftboard](https://github.com/thomaschampagne/zwiftboard/blob/ee4b1f2156d316398f71aeb09b67282901456b8e/internal/ble/unlock.go).
 
@@ -101,6 +103,16 @@ Sekwencja protokołu jest oparta na [jasasonc/clickbridge](https://github.com/ja
 Tryb `RightOnly` (awaryjny, gdyby lewy puck był zablokowany): łączy się tylko z prawym puckiem, a **B = Shift Down**.
 Zmiany mapowania i inne ustawienia: skopiuj [`clickbridge.example.json`](src/ClickBridge.App/clickbridge.example.json)
 jako `clickbridge.json` obok `clickbridge.exe` (albo w folderze, z którego uruchamiasz).
+
+### Ograniczenie do własnych kontrolerów
+
+Domyślnie mostek łączy się z każdym urządzeniem w zasięgu, które rozgłasza się jako kontroler Zwift, a w trybie `Auto` odpowiada na jego wyzwanie Twoją sesją Zwift. Aby używać wyłącznie swoich kontrolerów, wpisz ich adresy w `clickbridge.json`:
+
+```json
+"allowedControllers": ["AA:BB:CC:DD:EE:FF"]
+```
+
+Adres znajdziesz w logu, w wierszu `Zwift device ...`. Mostek śledzi najwyżej 8 kontrolerów i przyjmuje najwyżej 8 połączeń aplikacji.
 
 ### Sieć i zapora
 

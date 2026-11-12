@@ -18,6 +18,9 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
 
+    /// <summary>Unlock requests use the Zwift account, so a misbehaving device must not trigger them in a burst.</summary>
+    private static readonly TimeSpan MinUnlockGap = TimeSpan.FromSeconds(3);
+
     private readonly IBridgeLog _log;
     private readonly bool _sendHandshake;
     private readonly Func<ZwiftUnlockClient?>? _unlockClient;
@@ -40,6 +43,8 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
     private Task _resetTask = Task.CompletedTask;
     private Task? _disposeTask;
     private bool _resetting;
+    private long _lastAttemptAt = long.MinValue;
+    private long _lastUnlockAt = long.MinValue;
     private volatile bool _ready;
     private volatile bool _disposed;
 
@@ -72,11 +77,22 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
 
     public string Tag { get; }
 
-    public DateTime LastAttemptAt { get; private set; } = DateTime.MinValue;
+    public bool IsReady => _ready && ConnectionStatus == BluetoothConnectionStatus.Connected;
 
-    public bool IsReady => _ready && _device?.ConnectionStatus == BluetoothConnectionStatus.Connected;
-
-    public BluetoothConnectionStatus? ConnectionStatus => _device?.ConnectionStatus;
+    public BluetoothConnectionStatus? ConnectionStatus
+    {
+        get
+        {
+            try
+            {
+                return _device?.ConnectionStatus;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null; // read while another thread was dropping the connection
+            }
+        }
+    }
 
     public int Battery { get; private set; } = -1;
 
@@ -87,7 +103,11 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
 
     public bool HandshakeAnswered { get; private set; }
 
-    public bool ShouldRetry => !_disposed && !IsReady && DateTime.Now - LastAttemptAt > RetryDelay;
+    public bool ShouldRetry => !_disposed && !IsReady && ElapsedSince(Volatile.Read(ref _lastAttemptAt)) > RetryDelay;
+
+    // Monotonic clock: wall-clock jumps (DST, time sync) must not delay or rush a retry.
+    private static TimeSpan ElapsedSince(long tickCount) =>
+        tickCount == long.MinValue ? TimeSpan.MaxValue : TimeSpan.FromMilliseconds(Environment.TickCount64 - tickCount);
 
     public async Task EnsureConnectedAsync(string reason)
     {
@@ -103,18 +123,33 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
                 return;
             }
 
-            LastAttemptAt = DateTime.Now;
+            Volatile.Write(ref _lastAttemptAt, Environment.TickCount64);
             _log.Info(Tag, $"Connecting ({reason})...");
             await SetupAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             SetReady(false);
-            _log.Error(Tag, $"Setup failed: {ex.GetType().Name}: {ex.Message}");
+            if (!_disposed)
+            {
+                _log.Error(Tag, $"Setup failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
         finally
         {
-            _setupLock.Release();
+            try
+            {
+                if (!_ready && !_disposed)
+                {
+                    // A half-configured link would stay up (MaintainConnection) and the controller would stop
+                    // advertising, so nothing would ever trigger another attempt. Let it advertise again.
+                    DropConnection();
+                }
+            }
+            finally
+            {
+                _setupLock.Release();
+            }
         }
     }
 
@@ -139,19 +174,21 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
         await EnsureConnectedAsync("manual reconnect").ConfigureAwait(false);
     }
 
-    public async Task SendHandshakeAsync()
+    /// <returns>Whether the controller accepted the write.</returns>
+    public async Task<bool> SendHandshakeAsync()
     {
         var characteristic = _syncRx;
         if (characteristic is null)
         {
             _log.Warn(Tag, "Cannot send handshake: SyncRx characteristic not available.");
-            return;
+            return false;
         }
 
         byte[] command = Kind.IsClickV2() ? ZwiftConstants.ClickV2StartCommand : ZwiftConstants.RideOn.ToArray();
         var option = SyncRxWriteOption(characteristic);
         var status = await characteristic.WriteValueAsync(command.AsBuffer(), option).AsTask().ConfigureAwait(false);
         _log.Info(Tag, $"SyncRx <= {Hex.Format(command)} ({option}) -> {status}");
+        return status == GattCommunicationStatus.Success;
     }
 
     private static GattWriteOption SyncRxWriteOption(GattCharacteristic characteristic) =>
@@ -240,7 +277,13 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
             syncTx.ValueChanged += OnSyncTxValueChanged;
         }
 
-        await SubscribeAsync(asyncCharacteristic, preferIndicate: false).ConfigureAwait(false);
+        // Buttons arrive on ASYNC: without that subscription the controller would look ready but stay silent.
+        if (!await SubscribeAsync(asyncCharacteristic, preferIndicate: false).ConfigureAwait(false))
+        {
+            _log.Error(Tag, "Could not subscribe to button notifications.");
+            return;
+        }
+
         await SubscribeAsync(syncTx, preferIndicate: true).ConfigureAwait(false);
 
         lock (_frameLock)
@@ -250,7 +293,12 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
 
         if (_sendHandshake)
         {
-            await SendHandshakeAsync().ConfigureAwait(false);
+            if (!await SendHandshakeAsync().ConfigureAwait(false))
+            {
+                _log.Error(Tag, "The RideOn handshake was not written.");
+                return;
+            }
+
             if (_offlineResetInterval is not null)
             {
                 await Task.Delay(300, _lifetime.Token).ConfigureAwait(false);
@@ -369,7 +417,7 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
         session?.Cancel();
     }
 
-    private async Task SubscribeAsync(GattCharacteristic characteristic, bool preferIndicate)
+    private async Task<bool> SubscribeAsync(GattCharacteristic characteristic, bool preferIndicate)
     {
         var props = characteristic.CharacteristicProperties;
         var canIndicate = props.HasFlag(GattCharacteristicProperties.Indicate);
@@ -377,7 +425,7 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
         if (!canIndicate && !canNotify)
         {
             _log.Warn(Tag, $"{characteristic.Uuid} supports neither notify nor indicate.");
-            return;
+            return false;
         }
 
         var value = (preferIndicate && canIndicate) || !canNotify
@@ -393,6 +441,8 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
         {
             _log.Warn(Tag, message);
         }
+
+        return status == GattCommunicationStatus.Success;
     }
 
     private async Task ReadDeviceInfoAsync()
@@ -491,6 +541,13 @@ public sealed class ZwiftController : IDisposable, IAsyncDisposable
             return;
         }
 
+        if (ElapsedSince(_lastUnlockAt) < MinUnlockGap)
+        {
+            _log.Warn(Tag, "Unlock challenge ignored: it came too soon after the previous one.");
+            return;
+        }
+
+        _lastUnlockAt = Environment.TickCount64;
         CancelUnlock();
         var attempt = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var challenge = payload.ToArray();

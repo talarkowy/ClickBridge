@@ -112,7 +112,7 @@ public sealed class ObcIncomingParser
             return 0;
         }
 
-        var appId = Encoding.UTF8.GetString(b, pos, idLength);
+        var appId = ReadText(b, pos, idLength);
         pos += idLength;
 
         var versionLength = b[pos++];
@@ -121,7 +121,7 @@ public sealed class ObcIncomingParser
             return 0;
         }
 
-        var appVersion = Encoding.UTF8.GetString(b, pos, versionLength);
+        var appVersion = ReadText(b, pos, versionLength);
         pos += versionLength;
 
         var count = b[pos++];
@@ -133,4 +133,21 @@ public sealed class ObcIncomingParser
         message = new ObcAppInfo(b[1], appId, appVersion, b.AsSpan(pos, count).ToArray());
         return pos + count;
     }
+
+    /// <summary>
+    /// Text from the network ends up in the log and on the console, so control characters (new lines,
+    /// terminal escape sequences) are replaced.
+    /// </summary>
+    private static string ReadText(byte[] b, int index, int count) =>
+        string.Create(count == 0 ? 0 : Encoding.UTF8.GetCharCount(b, index, count), (b, index, count), static (span, state) =>
+        {
+            Encoding.UTF8.GetChars(state.b.AsSpan(state.index, state.count), span);
+            for (var i = 0; i < span.Length; i++)
+            {
+                if (char.IsControl(span[i]))
+                {
+                    span[i] = '?';
+                }
+            }
+        });
 }

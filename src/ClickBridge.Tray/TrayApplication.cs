@@ -9,10 +9,10 @@ internal sealed class TrayApplication : ApplicationContext
 {
     private readonly ZwiftAccount _account;
     private readonly IBridgeLog _log;
-    private BridgeHost _bridge;
+    private volatile BridgeHost _bridge;
     private readonly BridgeConfig _config;
     private readonly string _configPath;
-    private bool _bridgeRunning;
+    private volatile bool _bridgeRunning; // set from thread-pool continuations, read by the UI timer
     private readonly AccountWindow _window;
     private readonly NotifyIcon _icon;
     private readonly ContextMenuStrip _menu = new();
@@ -141,7 +141,7 @@ internal sealed class TrayApplication : ApplicationContext
 
             var previous = _config.Mode;
             _config.Mode = selected;
-            try { _config.Save(_configPath); }
+            try { _config.SaveMode(_configPath); }
             catch
             {
                 _config.Mode = previous;

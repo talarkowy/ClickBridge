@@ -114,7 +114,7 @@ OBC jest preferowane (oficjalny, udokumentowany protokół).
 - 2026-11-11 20:37: `clickbridge` na PC — serwer TCP odpowiada statusem `02 FF 00`, parsuje App Info,
   rejestracja mDNS przez `DnsServiceRegister` działa: surowe zapytanie PTR `_openbikecontrol._tcp.local` dostaje
   PTR + SRV + TXT + A. Windows odpowiada rekordem A z adresem interfejsu, na którym przyszło zapytanie
-  (na vEthernet: 172.26.240.1), więc klient z LAN-u dostanie adres LAN. **Do sprawdzenia: realne połączenie MyWhoosh.**
+  (np. na vEthernet — adres przełącznika wirtualnego), więc klient z LAN-u dostanie adres LAN. **Do sprawdzenia: realne połączenie MyWhoosh.**
 
 - 2026-11-11 20:53: **MyWhoosh działa z `clickbridge` na tym samym PC** (`logs/clickbridge-20261111-204426.log`):
   - MyWhoosh (Windows, ze Sklepu) wymaga Bonjour („Dircon Services”, instalator `bonjoursdksetup.exe` w paczce).

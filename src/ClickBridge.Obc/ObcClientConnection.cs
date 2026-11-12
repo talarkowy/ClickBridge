@@ -153,9 +153,6 @@ public sealed class ObcClientConnection : IDisposable
         _onClosed(this);
     }
 
-    public void Dispose()
-    {
-        Close();
-        _cts.Dispose();
-    }
+    // _cts is deliberately not disposed: a loop may still observe its token, and it owns no timer or handle.
+    public void Dispose() => Close();
 }
