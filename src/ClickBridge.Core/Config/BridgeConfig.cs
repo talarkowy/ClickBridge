@@ -1,8 +1,8 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using ClickBridge.Core.Mapping;
 using ClickBridge.Core.Obc;
 using ClickBridge.Core.Zwift;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClickBridge.Core.Config;
 

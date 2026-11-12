@@ -1,8 +1,8 @@
+using ClickBridge.Core.Logging;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using ClickBridge.Core.Logging;
 
 namespace ClickBridge.Obc;
 

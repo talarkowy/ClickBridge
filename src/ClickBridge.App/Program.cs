@@ -1,10 +1,10 @@
-﻿using System.Globalization;
 using ClickBridge.App;
 using ClickBridge.Core.Config;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Mapping;
 using ClickBridge.Core.Obc;
 using ClickBridge.Hosting;
+using System.Globalization;
 
 const string usage = """
     clickbridge — Zwift Click v2 -> OpenBikeControl (MyWhoosh) bridge

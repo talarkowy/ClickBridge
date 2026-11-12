@@ -1,7 +1,7 @@
-using System.Collections.Concurrent;
-using System.Runtime.InteropServices.WindowsRuntime;
 using ClickBridge.Core.Logging;
 using ClickBridge.Core.Zwift;
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 

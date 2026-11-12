@@ -1,9 +1,9 @@
+using ClickBridge.Core.Logging;
+using ClickBridge.Core.Zwift;
 using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
-using ClickBridge.Core.Logging;
-using ClickBridge.Core.Zwift;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 

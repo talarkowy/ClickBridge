@@ -1,7 +1,7 @@
-﻿using System.Collections.Concurrent;
 using ClickBridge.Ble;
 using ClickBridge.Core.Logging;
 using ClickBridge.Diagnostics;
+using System.Collections.Concurrent;
 
 DiagOptions? options;
 try
