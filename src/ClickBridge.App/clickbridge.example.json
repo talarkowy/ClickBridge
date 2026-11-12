@@ -8,7 +8,11 @@
 
   // "Auto": connect the left Click v2 puck, which relays both pucks.
   // "RightOnly": only the right puck: "+" shifts up, "B" shifts down.
+  // "OfflineReset": both pucks via the left hub, no Zwift; resets interrupt input (experimental).
   "mode": "Auto",
+
+  // OfflineReset only: reset after this many seconds or earlier on STOPPED (10-60).
+  "offlineResetSeconds": 55,
 
   // Advertise over mDNS so MyWhoosh finds the bridge by itself.
   "mdns": true,

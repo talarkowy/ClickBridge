@@ -34,6 +34,8 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private ZwiftControllerScanner? _scanner;
     private WindowsMdnsAdvertiser? _mdns;
+    private readonly Lock _controllerLock = new();
+    private bool _stopping;
 
     public BridgeHost(BridgeConfig config, IBridgeLog log, ZwiftAccount? account)
     {
@@ -49,6 +51,10 @@ public sealed class BridgeHost : IAsyncDisposable
     {
         _log.Info(Tag, $"Mode: {_config.Mode}. Mapping: " +
                        string.Join(", ", _mapping.Entries.Select(e => $"{e.Key}->{ObcButton.Name(e.Value)}")));
+        if (_config.Mode == BridgeMode.OfflineReset)
+        {
+            _log.Warn(Tag, $"Experimental offline mode: no Zwift account requests; left hub resets every {_config.OfflineResetSeconds}s or on STOPPED. Button input pauses during restart.");
+        }
 
         _server.Start();
         if (_config.Mdns)
@@ -184,6 +190,17 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnSeen(ZwiftAdvertisementSeen seen)
     {
+        lock (_controllerLock)
+        {
+            if (!_stopping)
+            {
+                HandleSeen(seen);
+            }
+        }
+    }
+
+    private void HandleSeen(ZwiftAdvertisementSeen seen)
+    {
         _lastSeen[seen.Kind] = DateTime.Now;
         if (!ShouldUse(seen.Kind))
         {
@@ -193,7 +210,8 @@ public sealed class BridgeHost : IAsyncDisposable
         var controller = _controllers.GetOrAdd(seen.Address, address =>
         {
             var c = new ZwiftController(address, seen.Kind, _log,
-                unlockClient: seen.Kind == ZwiftDeviceKind.ClickV2Left && _account is { } account ? () => account.Client : null);
+                unlockClient: _config.Mode == BridgeMode.Auto && seen.Kind == ZwiftDeviceKind.ClickV2Left && _account is { } account ? () => account.Client : null,
+                offlineResetInterval: _config.Mode == BridgeMode.OfflineReset ? TimeSpan.FromSeconds(_config.OfflineResetSeconds) : null);
             c.ButtonsChanged += OnButtonsChanged;
             c.ReadyChanged += OnReadyChanged;
             c.BatteryChanged += (_, _) => PublishStatus();
@@ -212,6 +230,7 @@ public sealed class BridgeHost : IAsyncDisposable
         {
             case (BridgeMode.RightOnly, ZwiftDeviceKind.ClickV2Right):
             case (BridgeMode.Auto, ZwiftDeviceKind.ClickV2Left):
+            case (BridgeMode.OfflineReset, ZwiftDeviceKind.ClickV2Left):
                 return true;
 
             case (BridgeMode.Auto, ZwiftDeviceKind.ClickV2Right):
@@ -263,10 +282,15 @@ public sealed class BridgeHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        lock (_controllerLock)
+        {
+            _stopping = true;
+        }
+
         _scanner?.Dispose();
         foreach (var controller in _controllers.Values)
         {
-            controller.Dispose();
+            await controller.DisposeAsync().ConfigureAwait(false);
         }
 
         _mdns?.Dispose();

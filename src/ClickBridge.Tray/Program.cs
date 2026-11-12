@@ -20,7 +20,7 @@ internal static class Program
 
         try
         {
-            var config = LoadConfig();
+            var (config, configPath) = LoadConfig();
             var logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClickBridge", "logs");
             using var log = new FileConsoleLog(logDirectory, "clickbridge-tray", writeToConsole: false);
             using var account = new ZwiftAccount(log);
@@ -29,7 +29,7 @@ internal static class Program
             // WinForms disposes the application context before Application.Run returns.
             // Bridge shutdown still needs the cancellation source after the UI has closed.
             using var shutdown = new CancellationTokenSource();
-            using var app = new TrayApplication(config, account, log, icon, openRequested, shutdown);
+            using var app = new TrayApplication(config, configPath, account, log, icon, openRequested, shutdown);
             try
             {
                 Application.Run(app);
@@ -49,13 +49,17 @@ internal static class Program
         }
     }
 
-    private static BridgeConfig LoadConfig()
+    private static (BridgeConfig Config, string Path) LoadConfig()
     {
+        var userPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClickBridge", BridgeConfig.FileName);
         var path = new[]
         {
             Path.Combine(AppContext.BaseDirectory, BridgeConfig.FileName),
             Path.Combine(Environment.CurrentDirectory, BridgeConfig.FileName),
+            userPath,
         }.FirstOrDefault(File.Exists);
-        return path is null ? new BridgeConfig() : BridgeConfig.Load(path);
+        var config = path is null ? new BridgeConfig() : BridgeConfig.Load(path);
+        _ = config.BuildMapping();
+        return (config, path ?? userPath);
     }
 }

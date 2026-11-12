@@ -37,6 +37,9 @@ public static class ZwiftConstants
     /// <summary>Handshake for the Click v2: "RideOn" followed by 0x02 0x03.</summary>
     public static byte[] ClickV2StartCommand => [.. RideOn, 0x02, 0x03];
 
+    /// <summary>Unsigned start used only by the experimental offline reset workaround.</summary>
+    public static byte[] ClickV2OfflineStartCommand => [0xFF, 0x04, 0x00];
+
     public static ReadOnlySpan<byte> UnlockChallengeHeader => [0xFF, 0x03, 0x00];
 
     public static byte[] CreateUnlockReply(ReadOnlySpan<byte> signedReply) => [0xFF, 0x04, 0x00, .. signedReply];

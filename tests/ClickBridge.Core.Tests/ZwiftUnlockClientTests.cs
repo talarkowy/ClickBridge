@@ -40,10 +40,29 @@ public sealed class ZwiftUnlockClientTests
         var challenge = Assert.IsType<UnlockChallenge>(ZwiftMessageParser.Parse([0xFF, 0x03, 0x00, .. protobuf]));
         var signedReply = await client.SolveAsync(challenge.Payload, cancellationToken);
 
+        Assert.NotNull(signedReply);
         Assert.Equal([0xFF, 0x04, 0x00, 0xFE, 0x01], ZwiftConstants.CreateUnlockReply(signedReply));
         Assert.Equal("refresh", refreshToken);
         Assert.Empty(saved);
         Assert.Empty(calls);
+    }
+
+    [Fact]
+    public async Task Solve_NoContentReturnsNoReplyAndTheNextChallengeCanSucceed()
+    {
+        var responses = new Queue<HttpResponseMessage>([
+            Tokens("access", "rotated"),
+            new(HttpStatusCode.NoContent),
+            Reply(0xAB),
+        ]);
+        using var http = new HttpClient(new StubHandler(_ => Task.FromResult(responses.Dequeue())));
+        var saved = new List<string>();
+        var client = CreateClient(http, "saved", saved);
+
+        Assert.Null(await client.SolveAsync(new byte[] { 1 }, CancellationToken.None));
+        Assert.Equal(new byte[] { 0xAB }, await client.SolveAsync(new byte[] { 2 }, CancellationToken.None));
+        Assert.Equal("rotated", Assert.Single(saved));
+        Assert.Empty(responses);
     }
 
     [Fact]

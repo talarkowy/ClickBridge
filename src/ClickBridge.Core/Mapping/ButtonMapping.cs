@@ -10,6 +10,9 @@ public enum BridgeMode
 
     /// <summary>Connect only the right puck (fallback when the left one is locked): ＋ shifts up, B shifts down.</summary>
     RightOnly,
+
+    /// <summary>Use the left hub for both pucks without Zwift, periodically restarting it.</summary>
+    OfflineReset,
 }
 
 /// <summary>Maps Zwift controller buttons to OpenBikeControl button IDs.</summary>

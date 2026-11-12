@@ -14,13 +14,15 @@ namespace ClickBridge.Ble;
 /// handshake and raises events for frames, button changes and battery. Re-runs the setup after Windows
 /// restores a dropped connection.
 /// </summary>
-public sealed class ZwiftController : IDisposable
+public sealed class ZwiftController : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
 
     private readonly IBridgeLog _log;
     private readonly bool _sendHandshake;
     private readonly Func<ZwiftUnlockClient?>? _unlockClient;
+    private readonly TimeSpan? _offlineResetInterval;
+    private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _setupLock = new(1, 1);
     private readonly Lock _frameLock = new();
     private readonly ButtonStateTracker _tracker = new();
@@ -33,17 +35,23 @@ public sealed class ZwiftController : IDisposable
     private GattCharacteristic? _syncTx;
     private CancellationTokenSource? _unlockAttempt;
     private ReadOnlyMemory<byte> _pendingUnlockChallenge;
+    private CancellationTokenSource? _resetSession;
+    private ClickV2ResetWatchdog? _resetWatchdog;
+    private Task _resetTask = Task.CompletedTask;
+    private Task? _disposeTask;
+    private bool _resetting;
     private volatile bool _ready;
     private volatile bool _disposed;
 
     public ZwiftController(ulong address, ZwiftDeviceKind kind, IBridgeLog log, bool sendHandshake = true,
-        Func<ZwiftUnlockClient?>? unlockClient = null)
+        Func<ZwiftUnlockClient?>? unlockClient = null, TimeSpan? offlineResetInterval = null)
     {
         Address = address;
         Kind = kind;
         _log = log;
         _sendHandshake = sendHandshake;
-        _unlockClient = unlockClient;
+        _offlineResetInterval = kind == ZwiftDeviceKind.ClickV2Left ? offlineResetInterval : null;
+        _unlockClient = _offlineResetInterval is null ? unlockClient : null;
         Tag = $"{kind.ShortName()} {FormatAddress(address)}";
     }
 
@@ -90,7 +98,7 @@ public sealed class ZwiftController : IDisposable
 
         try
         {
-            if (IsReady)
+            if (_disposed || IsReady)
             {
                 return;
             }
@@ -115,6 +123,11 @@ public sealed class ZwiftController : IDisposable
         await _setupLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _log.Warn(Tag, "Forced reconnect: dropping the connection.");
             DropConnection();
         }
@@ -137,7 +150,7 @@ public sealed class ZwiftController : IDisposable
 
         byte[] command = Kind.IsClickV2() ? ZwiftConstants.ClickV2StartCommand : ZwiftConstants.RideOn.ToArray();
         var option = SyncRxWriteOption(characteristic);
-        var status = await characteristic.WriteValueAsync(command.AsBuffer(), option);
+        var status = await characteristic.WriteValueAsync(command.AsBuffer(), option).AsTask().ConfigureAwait(false);
         _log.Info(Tag, $"SyncRx <= {Hex.Format(command)} ({option}) -> {status}");
     }
 
@@ -152,7 +165,7 @@ public sealed class ZwiftController : IDisposable
 
         if (_device is null)
         {
-            _device = await BluetoothLEDevice.FromBluetoothAddressAsync(Address);
+            _device = await BluetoothLEDevice.FromBluetoothAddressAsync(Address).AsTask().ConfigureAwait(false);
             if (_device is null)
             {
                 _log.Error(Tag, "BluetoothLEDevice.FromBluetoothAddressAsync returned null.");
@@ -165,12 +178,12 @@ public sealed class ZwiftController : IDisposable
 
         if (_gattSession is null)
         {
-            _gattSession = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId);
+            _gattSession = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId).AsTask().ConfigureAwait(false);
             _gattSession.MaintainConnection = true;
             _gattSession.SessionStatusChanged += (_, e) => _log.Verbose(Tag, $"GATT session: {e.Status} (error {e.Error})");
         }
 
-        var servicesResult = await _device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
+        var servicesResult = await _device.GetGattServicesAsync(BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
         if (servicesResult.Status != GattCommunicationStatus.Success)
         {
             _log.Error(Tag, $"GetGattServices failed: {servicesResult.Status} protocolError={servicesResult.ProtocolError}");
@@ -191,7 +204,7 @@ public sealed class ZwiftController : IDisposable
             return;
         }
 
-        var charsResult = await custom.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
+        var charsResult = await custom.GetCharacteristicsAsync(BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
         if (charsResult.Status != GattCommunicationStatus.Success)
         {
             _log.Error(Tag, $"GetCharacteristics failed: {charsResult.Status}");
@@ -222,6 +235,7 @@ public sealed class ZwiftController : IDisposable
             _async = asyncCharacteristic;
             _syncRx = syncRx;
             _syncTx = syncTx;
+            _resetWatchdog = _offlineResetInterval is not null && _sendHandshake ? new ClickV2ResetWatchdog() : null;
             asyncCharacteristic.ValueChanged += OnAsyncValueChanged;
             syncTx.ValueChanged += OnSyncTxValueChanged;
         }
@@ -237,13 +251,122 @@ public sealed class ZwiftController : IDisposable
         if (_sendHandshake)
         {
             await SendHandshakeAsync().ConfigureAwait(false);
+            if (_offlineResetInterval is not null)
+            {
+                await Task.Delay(300, _lifetime.Token).ConfigureAwait(false);
+                var status = await syncRx.WriteValueAsync(ZwiftConstants.ClickV2OfflineStartCommand.AsBuffer(), SyncRxWriteOption(syncRx)).AsTask().ConfigureAwait(false);
+                _log.Info(Tag, $"Offline start FF 04 00 -> {status} (unsigned; no Zwift request).");
+                if (status != GattCommunicationStatus.Success)
+                {
+                    return;
+                }
+            }
         }
         else
         {
             _log.Warn(Tag, "Handshake disabled: not sending RideOn.");
         }
 
-        SetReady(true);
+        lock (_frameLock)
+        {
+            if (_disposed || _syncRx != syncRx || ConnectionStatus != BluetoothConnectionStatus.Connected)
+            {
+                return;
+            }
+
+            SetReady(true);
+            if (_offlineResetInterval is { } interval && _sendHandshake)
+            {
+                var session = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+                var watchdog = _resetWatchdog ?? new ClickV2ResetWatchdog();
+                _resetSession = session;
+                _resetWatchdog = watchdog;
+                _log.Info(Tag, $"Offline reset armed: STOPPED or {interval.TotalSeconds:0}s. Both pucks may pause during restart.");
+                _resetTask = Task.Run(() => RunOfflineResetAsync(syncRx, session, watchdog, interval));
+            }
+        }
+    }
+
+    private async Task RunOfflineResetAsync(GattCharacteristic rx, CancellationTokenSource session,
+        ClickV2ResetWatchdog watchdog, TimeSpan interval)
+    {
+        try
+        {
+            var reason = await watchdog.WaitAsync(interval, session.Token).ConfigureAwait(false);
+            await _setupLock.WaitAsync(session.Token).ConfigureAwait(false);
+            try
+            {
+                Task<GattCommunicationStatus> write;
+                lock (_frameLock)
+                {
+                    session.Token.ThrowIfCancellationRequested();
+                    if (_disposed || _resetSession != session || _syncRx != rx || !IsReady)
+                    {
+                        return;
+                    }
+
+                    _resetting = true;
+                    SetReady(false); // releases all OBC buttons before rebooting the hub
+                    _log.Warn(Tag, $"Offline RESET ({reason}). Releasing buttons and restarting the left hub.");
+                }
+
+                try
+                {
+                    lock (_frameLock)
+                    {
+                        session.Token.ThrowIfCancellationRequested();
+                        write = rx.WriteValueAsync(new byte[] { ZwiftOpcodes.Reset }.AsBuffer(), SyncRxWriteOption(rx)).AsTask(session.Token);
+                    }
+
+                    var status = await write.ConfigureAwait(false);
+                    _log.Info(Tag, $"Offline RESET 18 -> {status}.");
+                    await Task.Delay(1000, session.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    DropConnection();
+                }
+            }
+            finally
+            {
+                _setupLock.Release();
+            }
+
+            await EnsureConnectedAsync("offline reset completed").ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (session.IsCancellationRequested)
+        {
+            // Reconnect, disconnect or shutdown invalidated this BLE session.
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed)
+            {
+                _log.Warn(Tag, $"Offline reset failed ({ex.GetType().Name}). Waiting for a new advertisement to reconnect.");
+            }
+        }
+        finally
+        {
+            lock (_frameLock)
+            {
+                if (_resetSession == session)
+                {
+                    _resetSession = null;
+                    _resetWatchdog = null;
+                }
+
+                session.Dispose();
+            }
+        }
+    }
+
+    // Caller holds _frameLock. The task owns and disposes its cancellation source.
+    private void CancelOfflineReset()
+    {
+        var session = _resetSession;
+        _resetSession = null;
+        _resetWatchdog = null;
+        session?.Cancel();
     }
 
     private async Task SubscribeAsync(GattCharacteristic characteristic, bool preferIndicate)
@@ -260,7 +383,7 @@ public sealed class ZwiftController : IDisposable
         var value = (preferIndicate && canIndicate) || !canNotify
             ? GattClientCharacteristicConfigurationDescriptorValue.Indicate
             : GattClientCharacteristicConfigurationDescriptorValue.Notify;
-        var status = await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(value);
+        var status = await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(value).AsTask().ConfigureAwait(false);
         var message = $"Subscribe {characteristic.Uuid} ({value}) -> {status}";
         if (status == GattCommunicationStatus.Success)
         {
@@ -297,13 +420,13 @@ public sealed class ZwiftController : IDisposable
 
     private static async Task<byte[]?> ReadAsync(GattDeviceService service, Guid characteristicUuid)
     {
-        var chars = await service.GetCharacteristicsForUuidAsync(characteristicUuid, BluetoothCacheMode.Uncached);
+        var chars = await service.GetCharacteristicsForUuidAsync(characteristicUuid, BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
         if (chars.Status != GattCommunicationStatus.Success || chars.Characteristics.Count == 0)
         {
             return null;
         }
 
-        var read = await chars.Characteristics[0].ReadValueAsync(BluetoothCacheMode.Uncached);
+        var read = await chars.Characteristics[0].ReadValueAsync(BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
         return read.Status == GattCommunicationStatus.Success ? read.Value.ToArray() : null;
     }
 
@@ -327,6 +450,11 @@ public sealed class ZwiftController : IDisposable
             switch (message)
             {
                 case ControllerNotification controller:
+                    if (_resetting)
+                    {
+                        return;
+                    }
+
                     var (pressed, released) = _tracker.Update(controller.Pressed);
                     FrameReceived?.Invoke(this, channel, message);
                     if (pressed != ZwiftButtons.None || released != ZwiftButtons.None)
@@ -343,6 +471,9 @@ public sealed class ZwiftController : IDisposable
                     break;
                 case UnlockChallenge challenge when source == _async:
                     StartUnlock(challenge.Payload);
+                    break;
+                case VendorMessage { LooksLikeStopped: true }:
+                    _resetWatchdog?.NotifyStopped();
                     break;
             }
 
@@ -375,6 +506,12 @@ public sealed class ZwiftController : IDisposable
         try
         {
             var reply = await client.SolveAsync(payload, attempt.Token).ConfigureAwait(false);
+            if (reply is null)
+            {
+                LogUnlockResult(attempt, _log.Info, "Zwift returned HTTP 204 (No Content). No signed unlock reply to send.");
+                return;
+            }
+
             var frame = ZwiftConstants.CreateUnlockReply(reply);
             Task<GattCommunicationStatus> write;
             lock (_frameLock)
@@ -386,12 +523,13 @@ public sealed class ZwiftController : IDisposable
                 }
 
                 attempt.Token.ThrowIfCancellationRequested();
+                _log.Info(Tag, $"Received signed unlock reply from Zwift (HTTP 200, {reply.Length}B).");
                 write = rx.WriteValueAsync(frame.AsBuffer(), SyncRxWriteOption(rx)).AsTask(attempt.Token);
             }
 
             var status = await write.ConfigureAwait(false);
             var sent = status == GattCommunicationStatus.Success;
-            LogUnlockResult(attempt, sent, sent ? $"Signed unlock reply sent to SyncRx ({frame.Length}B)."
+            LogUnlockResult(attempt, sent ? _log.Event : _log.Warn, sent ? $"Signed unlock reply sent to SyncRx ({frame.Length}B)."
                 : $"Could not write the signed unlock reply to SyncRx ({status}).");
         }
         catch (Exception ex)
@@ -404,7 +542,7 @@ public sealed class ZwiftController : IDisposable
                 OperationCanceledException => "Zwift unlock attempt timed out.",
                 _ => $"Zwift unlock attempt failed ({ex.GetType().Name}).",
             };
-            LogUnlockResult(attempt, success: false, warning);
+            LogUnlockResult(attempt, _log.Warn, warning);
         }
         finally
         {
@@ -421,7 +559,7 @@ public sealed class ZwiftController : IDisposable
         }
     }
 
-    private void LogUnlockResult(CancellationTokenSource attempt, bool success, string message)
+    private void LogUnlockResult(CancellationTokenSource attempt, Action<string, string> log, string message)
     {
         lock (_frameLock)
         {
@@ -430,14 +568,7 @@ public sealed class ZwiftController : IDisposable
                 return;
             }
 
-            if (success)
-            {
-                _log.Event(Tag, message);
-            }
-            else
-            {
-                _log.Warn(Tag, message);
-            }
+            log(Tag, message);
         }
     }
 
@@ -497,6 +628,10 @@ public sealed class ZwiftController : IDisposable
             lock (_frameLock)
             {
                 CancelUnlock();
+                if (!_resetting)
+                {
+                    CancelOfflineReset();
+                }
             }
 
             _log.Warn(Tag, "Disconnected.");
@@ -519,6 +654,8 @@ public sealed class ZwiftController : IDisposable
         lock (_frameLock)
         {
             CancelUnlock();
+            CancelOfflineReset();
+            _resetting = false;
             asyncCharacteristic = _async;
             syncTx = _syncTx;
             _async = _syncRx = _syncTx = null;
@@ -556,16 +693,32 @@ public sealed class ZwiftController : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-        _disposed = true;
-        DropConnection();
-        _setupLock.Dispose();
+    public ValueTask DisposeAsync()
+    {
+        lock (_frameLock)
+        {
+            if (_disposeTask is not null)
+            {
+                return new ValueTask(_disposeTask);
+            }
+
+            _disposed = true;
+            _lifetime.Cancel();
+            CancelUnlock();
+            CancelOfflineReset();
+            var resetTask = _resetTask;
+            _disposeTask = Task.Run(async () =>
+            {
+                await resetTask.ConfigureAwait(false);
+                await _setupLock.WaitAsync().ConfigureAwait(false);
+                try { DropConnection(); }
+                finally { _setupLock.Release(); }
+                _lifetime.Dispose();
+            });
+            return new ValueTask(_disposeTask);
+        }
     }
 
     public static string FormatAddress(ulong address) =>

@@ -36,7 +36,7 @@ public static class ZwiftMessageParser
                 ZwiftOpcodes.BatteryStatus => new BatteryMessage(raw, ReadUInt32Field(body, 2) is { } p2 ? (int)p2 : -1),
                 ZwiftOpcodes.Idle => new IdleMessage(raw),
                 ZwiftOpcodes.VendorMessage => new VendorMessage(
-                    raw, frame.SequenceEqual(StoppedVariant1) || frame.SequenceEqual(StoppedVariant2)),
+                    raw, frame.StartsWith(StoppedVariant1) || frame.StartsWith(StoppedVariant2)),
                 _ => new OtherMessage(raw, frame[0]),
             };
         }

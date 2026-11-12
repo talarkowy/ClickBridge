@@ -15,6 +15,7 @@ const string usage = """
       --name <text>               Name shown in the training app (default: ClickBridge).
       --port <n>                  Preferred TCP port (default: 36867).
       --right-only                Use only the right Click v2 puck (+ shifts up, B shifts down).
+      --offline-reset             Both pucks via the left hub, without Zwift; periodic resets (experimental).
       --zwift-login               Sign in to Zwift and save a session for automatic Click v2 unlocks.
       --zwift-logout              Delete the saved local Zwift session and exit.
       --advertise-address <ip>    IPv4 address to advertise (default: auto-detect).
@@ -68,7 +69,7 @@ using var log = new FileConsoleLog(logDirectory, "clickbridge");
 log.Info("APP", $"clickbridge started. Log file: {log.FilePath}");
 
 using var account = new ZwiftAccount(log);
-if (config.Mode != BridgeMode.RightOnly || zwiftSessionAction == ZwiftSessionAction.SignIn)
+if (config.Mode == BridgeMode.Auto || zwiftSessionAction == ZwiftSessionAction.SignIn)
 {
     try
     {
@@ -212,6 +213,9 @@ static (BridgeConfig Config, string LogDirectory, ZwiftSessionAction ZwiftSessio
             case "--right-only":
                 overrides.Add(c => c.Mode = BridgeMode.RightOnly);
                 break;
+            case "--offline-reset":
+                overrides.Add(c => c.Mode = BridgeMode.OfflineReset);
+                break;
             case "--zwift-login" or "--zwift-logout":
                 var action = args[i] == "--zwift-login" ? ZwiftSessionAction.SignIn : ZwiftSessionAction.Forget;
                 if (zwiftSession != ZwiftSessionAction.Reuse && zwiftSession != action)
@@ -255,6 +259,10 @@ static (BridgeConfig Config, string LogDirectory, ZwiftSessionAction ZwiftSessio
     }
 
     _ = config.BuildMapping(); // validate early
+    if (config.Mode == BridgeMode.OfflineReset && zwiftSession == ZwiftSessionAction.SignIn)
+    {
+        throw new ArgumentException("--offline-reset does not use Zwift. Remove --zwift-login or choose Auto mode.");
+    }
     if (configPath is not null)
     {
         Console.WriteLine($"Settings: {Path.GetFullPath(configPath)}");
