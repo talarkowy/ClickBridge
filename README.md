@@ -120,6 +120,27 @@ Adres znajdziesz w logu, w wierszu `Zwift device ...`. Mostek śledzi najwyżej 
 - Gdy MyWhoosh działa na **innym** komputerze, zapora Windows musi wpuszczać połączenia do `clickbridge.exe`
   (przy pierwszym uruchomieniu Windows może zapytać — zezwól dla sieci prywatnych).
 
+## Wydania (GitHub Release)
+
+Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) uruchamia się po wypchnięciu tagu wersji:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Na serwerach GitHuba uruchamia testy i buduje samodzielne `clickbridge-tray.exe` oraz konsolowe `clickbridge.exe` — każde jako jeden plik, bez wymagania .NET. Dołącza podpisane poświadczenie pochodzenia (build provenance) i publikuje Release z dwoma ZIP-ami (`ClickBridge-tray-…` i `ClickBridge-console-…`) oraz `SHA256SUMS.txt`. Tag musi mieć postać `vX.Y.Z`; numer trafia do wersji pliku EXE. Na mirrorze Gitea workflow jest pomijany.
+
+Przed pierwszym wydaniem włącz w ustawieniach repozytorium na GitHubie **Settings → General → Releases → Enable release immutability**. Po opublikowaniu nie da się wtedy podmienić plików wydania. Poświadczenia pochodzenia działają tylko w repozytorium publicznym.
+
+Pobrany plik można sprawdzić tak:
+
+```bash
+gh attestation verify clickbridge-tray.exe --repo talarkowy/ClickBridge
+```
+
+EXE nie jest podpisany cyfrowo, więc Windows SmartScreen pokaże ostrzeżenie przy pierwszym uruchomieniu (**Więcej informacji** → **Uruchom mimo to**).
+
 ## click-diag
 
 ```bash

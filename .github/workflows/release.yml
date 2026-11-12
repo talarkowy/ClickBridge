@@ -1,0 +1,121 @@
+# Builds clickbridge-tray.exe and the console clickbridge.exe on GitHub's runners when a version
+# tag (v1.2.3) is pushed, records a signed build-provenance attestation and publishes a GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The tag is also pushed to the Gitea mirror; Gitea Actions reads .github/workflows too, so skip there.
+    if: github.server_url == 'https://github.com'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write     # create the release
+      id-token: write     # sign the provenance attestation
+      attestations: write # store the attestation
+    env:
+      TAG: ${{ github.ref_name }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check tag format
+        run: |
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Tag '$env:TAG' must look like v1.2.3." }
+          "VERSION=$($Matches[1])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Test
+        run: dotnet test ClickBridge.slnx -c Release
+
+      - name: Publish single-file EXEs
+        run: |
+          $apps = @{ 'src/ClickBridge.Tray' = 'publish/tray'; 'src/ClickBridge.App' = 'publish/console' }
+          foreach ($project in $apps.Keys) {
+            dotnet publish $project -c Release -r win-x64 --self-contained `
+              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+              -p:EnableCompressionInSingleFile=true -p:DebugType=none `
+              "-p:Version=$env:VERSION" -o $apps[$project]
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Package
+        run: |
+          # Files are listed explicitly so an unexpected file in a publish folder never ends up in the release.
+          $packages = [ordered]@{
+            tray    = @('publish/tray/clickbridge-tray.exe', 'publish/tray/clickbridge.example.json')
+            console = @('publish/console/clickbridge.exe', 'publish/console/clickbridge.example.json')
+          }
+          New-Item -ItemType Directory dist | Out-Null
+          $hashed = foreach ($name in $packages.Keys) {
+            $zip = "dist/ClickBridge-$name-$env:TAG-win-x64.zip"
+            Compress-Archive -Path $packages[$name] -DestinationPath $zip
+            $packages[$name][0]
+            $zip
+          }
+          $sums = foreach ($file in $hashed) {
+            "$((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant())  $(Split-Path $file -Leaf)"
+          }
+          $sums | Out-File dist/SHA256SUMS.txt -Encoding ascii
+          $sums
+
+      - name: Attest build provenance
+        # Attestations for private repositories need GitHub Enterprise Cloud.
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            publish/tray/clickbridge-tray.exe
+            publish/console/clickbridge.exe
+            dist/*.zip
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @'
+          ## Pobieranie
+
+          - **ClickBridge-tray-{TAG}-win-x64.zip** — aplikacja z ikoną przy zegarze (`clickbridge-tray.exe`). Wybierz ją, jeśli nie wiesz, którą wersję pobrać.
+            Instrukcja: [README](https://github.com/{REPO}/blob/{TAG}/README.md#clickbridge-tray--aplikacja-w-obszarze-powiadomień).
+          - **ClickBridge-console-{TAG}-win-x64.zip** — wersja konsolowa (`clickbridge.exe`) z opcjami wiersza poleceń.
+            Instrukcja: [README](https://github.com/{REPO}/blob/{TAG}/README.md#clickbridge--mostek-do-mywhoosh).
+
+          Rozpakuj ZIP i uruchom EXE. Nie wymaga instalacji ani .NET. Nie uruchamiaj obu wersji naraz.
+
+          Pliki nie są podpisane cyfrowo, więc Windows SmartScreen pokaże ostrzeżenie:
+          wybierz **Więcej informacji** → **Uruchom mimo to**.
+
+          ## Weryfikacja
+
+          Suma SHA-256 pliku musi się zgadzać z `SHA256SUMS.txt`:
+
+          ```powershell
+          Get-FileHash .\clickbridge-tray.exe
+          ```
+
+          Pochodzenie pliku (zbudowany przez GitHub Actions z tego repozytorium, z tagu {TAG}):
+
+          ```bash
+          gh attestation verify clickbridge-tray.exe --repo {REPO}
+          ```
+          '@
+          $notes = $notes.Replace('{REPO}', $env:GITHUB_REPOSITORY).Replace('{TAG}', $env:TAG)
+          $assets = (Get-ChildItem dist -File).FullName
+          gh release create $env:TAG @assets --verify-tag --title "ClickBridge $env:TAG" --notes $notes
