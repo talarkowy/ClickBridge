@@ -129,7 +129,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Na serwerach GitHuba uruchamia testy i buduje samodzielny `clickbridge-tray.exe` — jeden plik, bez wymagania .NET. Dołącza podpisane poświadczenie pochodzenia (build provenance) i publikuje Release z ZIP-em oraz `SHA256SUMS.txt`. Tag musi mieć postać `vX.Y.Z`; numer trafia do wersji pliku EXE. Na mirrorze Gitea workflow jest pomijany.
+Na serwerach GitHuba uruchamia testy i buduje samodzielne `clickbridge-tray.exe` oraz konsolowe `clickbridge.exe` — każde jako jeden plik, bez wymagania .NET. Dołącza podpisane poświadczenie pochodzenia (build provenance) i publikuje Release z dwoma ZIP-ami (`ClickBridge-tray-…` i `ClickBridge-console-…`) oraz `SHA256SUMS.txt`. Tag musi mieć postać `vX.Y.Z`; numer trafia do wersji pliku EXE. Na mirrorze Gitea workflow jest pomijany.
 
 Przed pierwszym wydaniem włącz w ustawieniach repozytorium na GitHubie **Settings → General → Releases → Enable release immutability**. Po opublikowaniu nie da się wtedy podmienić plików wydania. Poświadczenia pochodzenia działają tylko w repozytorium publicznym.
 
