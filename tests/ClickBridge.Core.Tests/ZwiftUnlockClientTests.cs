@@ -136,9 +136,39 @@ public sealed class ZwiftUnlockClientTests
     private static ZwiftUnlockClient CreateClient(HttpClient http, string? refreshToken, List<string> saved) =>
         new(http, refreshToken, token =>
         {
-            saved.Add(token);
+            saved.Add(token ?? "(forgotten)");
             return Task.CompletedTask;
         });
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    public async Task Login_InvalidGrantIsReportedAsRejectedCredentials(HttpStatusCode status)
+    {
+        using var http = new HttpClient(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent("""{"error":"invalid_grant"}""", Encoding.UTF8, "application/json"),
+        })));
+        var client = CreateClient(http, null, []);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => client.LoginAsync("test@example.com", "wrong", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Solve_RejectedRefreshTokenForgetsTheSavedSession()
+    {
+        using var http = new HttpClient(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("""{"error":"invalid_grant"}""", Encoding.UTF8, "application/json"),
+        })));
+        var saved = new List<string>();
+        var client = CreateClient(http, "saved", saved);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.SolveAsync(new byte[] { 1 }, CancellationToken.None));
+        Assert.Equal("(forgotten)", Assert.Single(saved));
+        Assert.False(client.HasSession);
+    }
 
     private static HttpResponseMessage Tokens(string access, string refresh) => new(HttpStatusCode.OK)
     {

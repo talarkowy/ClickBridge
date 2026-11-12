@@ -8,6 +8,8 @@ using ClickBridge.Obc;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace ClickBridge.Hosting;
 
@@ -21,6 +23,9 @@ public sealed class BridgeHost : IAsyncDisposable
     /// <summary>In Auto mode the right puck is used alone only if no left puck shows up for this long.</summary>
     private static readonly TimeSpan LeftPuckGrace = TimeSpan.FromSeconds(10);
 
+    /// <summary>Any nearby device can advertise as a Zwift controller; do not track an unlimited number.</summary>
+    private const int MaxControllers = 8;
+
     private readonly BridgeConfig _config;
     private readonly IBridgeLog _log;
     private readonly ButtonMapping _mapping;
@@ -28,9 +33,11 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly ObcServer _server;
     private readonly ZwiftAccount? _account;
     private readonly ConcurrentDictionary<ulong, ZwiftController> _controllers = new();
-    private readonly ConcurrentDictionary<ZwiftDeviceKind, DateTime> _lastSeen = new();
+    private readonly ConcurrentDictionary<ZwiftDeviceKind, long> _lastSeen = new();
     private readonly ConcurrentDictionary<ZwiftDeviceKind, bool> _ignoredKindsLogged = new();
-    private readonly DateTime _startedAt = DateTime.Now;
+    private readonly ConcurrentDictionary<ulong, bool> _rejectedAddressesLogged = new();
+    private readonly IReadOnlySet<ulong> _allowedControllers;
+    private readonly long _startedAt = Environment.TickCount64; // monotonic, unlike DateTime.Now
 
     private ZwiftControllerScanner? _scanner;
     private WindowsMdnsAdvertiser? _mdns;
@@ -43,6 +50,7 @@ public sealed class BridgeHost : IAsyncDisposable
         _log = log;
         _account = account;
         _mapping = config.BuildMapping();
+        _allowedControllers = config.ParseAllowedControllers();
         _tracker = new ObcStateTracker(_mapping);
         _server = new ObcServer(log, config.Port, TimeSpan.FromSeconds(Math.Max(5, config.StatusIntervalSeconds)));
     }
@@ -54,6 +62,11 @@ public sealed class BridgeHost : IAsyncDisposable
         if (_config.Mode == BridgeMode.OfflineReset)
         {
             _log.Warn(Tag, $"Experimental offline mode: no Zwift account requests; left hub resets every {_config.OfflineResetSeconds}s or on STOPPED. Button input pauses during restart.");
+        }
+
+        if (_allowedControllers.Count > 0)
+        {
+            _log.Info(Tag, $"Only {_allowedControllers.Count} allowed controller address(es) will be used.");
         }
 
         _server.Start();
@@ -179,7 +192,7 @@ public sealed class BridgeHost : IAsyncDisposable
         var txt = new Dictionary<string, string>
         {
             ["version"] = "1",
-            ["id"] = $"clickbridge-{Environment.MachineName.ToLowerInvariant()}",
+            ["id"] = $"clickbridge-{StableInstallationId()}",
             ["name"] = _config.DeviceName,
             ["service-uuids"] = ObcServiceUuid,
             ["manufacturer"] = "ClickBridge",
@@ -187,6 +200,15 @@ public sealed class BridgeHost : IAsyncDisposable
         };
         _mdns.Register(_config.DeviceName, ServiceType, (ushort)_server.Port, address, txt);
     }
+
+    /// <summary>
+    /// Stable per computer, but does not broadcast the computer name itself in the TXT record.
+    /// (The mDNS host name is still visible on the LAN, as for any Windows machine.)
+    /// </summary>
+    private static string StableInstallationId() =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("clickbridge:" + Environment.MachineName.ToUpperInvariant())), 0, 6);
+
+    private static TimeSpan Since(long tickCount) => TimeSpan.FromMilliseconds(Environment.TickCount64 - tickCount);
 
     private void OnSeen(ZwiftAdvertisementSeen seen)
     {
@@ -201,9 +223,29 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void HandleSeen(ZwiftAdvertisementSeen seen)
     {
-        _lastSeen[seen.Kind] = DateTime.Now;
+        if (_allowedControllers.Count > 0 && !_allowedControllers.Contains(seen.Address))
+        {
+            if (_rejectedAddressesLogged.Count < 32 && _rejectedAddressesLogged.TryAdd(seen.Address, true))
+            {
+                _log.Info(Tag, $"Ignoring {ZwiftController.FormatAddress(seen.Address)}: not in allowedControllers.");
+            }
+
+            return;
+        }
+
+        _lastSeen[seen.Kind] = Environment.TickCount64;
         if (!ShouldUse(seen.Kind))
         {
+            return;
+        }
+
+        if (_controllers.Count >= MaxControllers && !_controllers.ContainsKey(seen.Address))
+        {
+            if (_ignoredKindsLogged.TryAdd(ZwiftDeviceKind.Unknown, true))
+            {
+                _log.Warn(Tag, $"Ignoring further Zwift devices: {MaxControllers} are already tracked. Set allowedControllers to pick yours.");
+            }
+
             return;
         }
 
@@ -236,8 +278,8 @@ public sealed class BridgeHost : IAsyncDisposable
             case (BridgeMode.Auto, ZwiftDeviceKind.ClickV2Right):
                 // The left puck relays both sides, so the right one alone is only a fallback.
                 var leftConnected = _controllers.Values.Any(c => c.Kind == ZwiftDeviceKind.ClickV2Left && c.IsReady);
-                var leftRecentlySeen = _lastSeen.TryGetValue(ZwiftDeviceKind.ClickV2Left, out var t) && DateTime.Now - t < LeftPuckGrace;
-                var use = !leftConnected && !leftRecentlySeen && DateTime.Now - _startedAt > LeftPuckGrace;
+                var leftRecentlySeen = _lastSeen.TryGetValue(ZwiftDeviceKind.ClickV2Left, out var t) && Since(t) < LeftPuckGrace;
+                var use = !leftConnected && !leftRecentlySeen && Since(_startedAt) > LeftPuckGrace;
                 if (use && _ignoredKindsLogged.TryAdd(kind, true))
                 {
                     _log.Warn(Tag, "Only the right Click v2 puck is around - using it alone. Tip: mode RightOnly maps B to shift down.");
@@ -269,8 +311,31 @@ public sealed class BridgeHost : IAsyncDisposable
         {
             _server.SendButtonState(_tracker.Remove(controller.Tag));
         }
+        else if (_config.Mode == BridgeMode.Auto && controller.Kind == ZwiftDeviceKind.ClickV2Left)
+        {
+            ReleaseRightFallback();
+        }
 
         PublishStatus();
+    }
+
+    /// <summary>The left hub relays both pucks, so a right puck connected as a fallback is no longer needed.</summary>
+    private void ReleaseRightFallback()
+    {
+        foreach (var (address, right) in _controllers)
+        {
+            if (right.Kind == ZwiftDeviceKind.ClickV2Right && _controllers.TryRemove(address, out _))
+            {
+                _log.Info(Tag, $"Left hub is ready: disconnecting the right puck {right.Tag} used as a fallback.");
+                _ignoredKindsLogged.TryRemove(ZwiftDeviceKind.ClickV2Right, out _);
+                _ = Task.Run(async () =>
+                {
+                    await right.DisposeAsync().ConfigureAwait(false);
+                    _server.SendButtonState(_tracker.Remove(right.Tag));
+                    PublishStatus();
+                });
+            }
+        }
     }
 
     private void PublishStatus()

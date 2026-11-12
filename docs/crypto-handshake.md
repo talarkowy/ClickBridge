@@ -18,7 +18,7 @@ Hipotezy, czemu blokada się nie uruchomiła (niepotwierdzone):
 1. firmware **1.0.2** jeszcze nie egzekwuje blokady (BikeControl wspomina 1.2.0);
 2. Click był niedawno (< 24 h) odblokowany przez Rouvy (oficjalny partner Zwifta), co ponoć trzyma ~24 h.
 
-Egzemplarz: **Zwift Click v2, lewy puck** (`D8:D1:5A:F5:3A:CF`, manufacturer data zaczyna się `0B`).
+Egzemplarz: **Zwift Click v2, lewy puck** (`XX:XX:XX:XX:XX:XX`, manufacturer data zaczyna się `0B`).
 Lewy puck jest „hubem” — przekazuje przyciski obu pucków, więc łączymy się tylko z nim. Prawy puck (`0A`)
 nie był osobno badany (sparowany z lewym, nie rozgłasza się).
 
@@ -56,7 +56,7 @@ Kierunek: `=>` host→device (write), `<=` device→host (notify/indicate/read).
 Mapowanie etykiet na charakterystyki: `ASYNC` = `...0002`, `SYNCTX` = `...0004`, write `SyncRx` = `...0003`.
 
 ```
-20:17:23.824  SCAN   advertisement: ClickV2Left D8:D1:5A:F5:3A:CF rssi=-69 manufData(Zwift 0x094A)=0B 3A CF
+20:17:23.824  SCAN   advertisement: ClickV2Left XX:XX:XX:XX:XX:XX rssi=-69 manufData(Zwift 0x094A)=0B XX XX
 20:17:23.925  link   Connected
 20:17:23.926  gatt   GATT session Active (Success)
 20:17:25.370  gatt   Services: 1800, 1801, 180A, 0000fc82-0000-1000-8000-00805f9b34fb, 180F
@@ -87,7 +87,7 @@ Pełny ciągły log każdej sesji jest w plikach `logs/click-diag-20261111-*.log
 
 ## 3. Kod BLE (subskrypcja + zapis)
 
-System: **Windows 11 Pro Insider Preview, 10.0.26340**. Adapter BLE: Intel (LE + central, radio On).
+System: **Windows 11**. Adapter BLE: wbudowany (LE + central, radio On).
 Biblioteka: **WinRT / Windows SDK** (`Windows.Devices.Bluetooth.GenericAttributeProfile`), .NET 10, C#.
 Pełne źródło: `src/ClickBridge.Ble/ZwiftController.cs`.
 

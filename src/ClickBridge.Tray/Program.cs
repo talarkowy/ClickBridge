@@ -22,7 +22,7 @@ internal static class Program
         {
             var (config, configPath) = LoadConfig();
             var logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClickBridge", "logs");
-            using var log = new FileConsoleLog(logDirectory, "clickbridge-tray", writeToConsole: false);
+            using var log = new FileConsoleLog(logDirectory, "clickbridge-tray", writeToConsole: false, retainDays: 30);
             using var account = new ZwiftAccount(log);
             using var iconStream = typeof(Program).Assembly.GetManifestResourceStream("ClickBridge.ico")!;
             using var icon = new Icon(iconStream);

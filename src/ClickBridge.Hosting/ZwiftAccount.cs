@@ -73,8 +73,34 @@ public sealed class ZwiftAccount(IBridgeLog log) : IDisposable
     private ZwiftUnlockClient CreateClient(string? refreshToken)
     {
         ZwiftUnlockClient? client = null;
-        client = new ZwiftUnlockClient(_http, refreshToken, token => StoreAsync(client!, token, replace: false, CancellationToken.None));
+        client = new ZwiftUnlockClient(_http, refreshToken, token => token is null
+            ? ForgetRejectedAsync(client!)
+            : StoreAsync(client!, token, replace: false, CancellationToken.None));
         return client;
+    }
+
+    /// <summary>Zwift rejected the saved session: remove it so the next launch does not load a dead token.</summary>
+    private Task ForgetRejectedAsync(ZwiftUnlockClient client)
+    {
+        lock (_sessionLock)
+        {
+            if (_disposed || _client != client)
+            {
+                return Task.CompletedTask;
+            }
+
+            try
+            {
+                ForgetSavedSession();
+                log.Warn(Tag, "Zwift rejected the saved session. It was removed; sign in again.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                log.Warn(Tag, $"Could not remove the rejected Zwift session ({ex.GetType().Name}).");
+            }
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task<bool> StoreAsync(ZwiftUnlockClient client, string token, bool replace, CancellationToken cancellationToken)

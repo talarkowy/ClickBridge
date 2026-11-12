@@ -20,6 +20,11 @@
   // IPv4 address to advertise; leave empty to auto-detect.
   "advertiseAddress": "",
 
+  // Bluetooth addresses of your controllers, e.g. ["AA:BB:CC:DD:EE:FF"] (shown in the log as "Zwift device ...").
+  // Empty: connect to any nearby device that advertises as a Zwift controller. Listing yours keeps a stranger's
+  // device from being connected and from using your Zwift session for its unlock.
+  "allowedControllers": [],
+
   // How often the device status (battery / connected) is resent, in seconds.
   "statusIntervalSeconds": 30,
 

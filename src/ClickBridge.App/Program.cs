@@ -42,7 +42,8 @@ catch (HelpRequestedException)
     Console.WriteLine(usage);
     return 0;
 }
-catch (Exception ex) when (ex is ArgumentException or FormatException or IOException or System.Text.Json.JsonException)
+catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException or IOException
+                               or UnauthorizedAccessException or System.Text.Json.JsonException)
 {
     Console.Error.WriteLine(ex.Message);
     Console.Error.WriteLine();

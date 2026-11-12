@@ -22,11 +22,18 @@ public sealed class WindowsMdnsAdvertiser : IDisposable
     private readonly RegisterCompleteCallback _callback;
     private readonly ManualResetEventSlim _completed = new();
 
+    /// <summary>
+    /// Advertisers whose native request is still pending when they are disposed. Windows may still invoke
+    /// the callback, so the delegate and the native buffers must outlive the object.
+    /// </summary>
+    private static readonly List<WindowsMdnsAdvertiser> Abandoned = [];
+
     private IntPtr _instance;
     private IntPtr _request;
     private IntPtr _ip4;
     private uint _lastStatus;
     private bool _registered;
+    private bool _callbackPending;
 
     public WindowsMdnsAdvertiser(IBridgeLog log)
     {
@@ -99,12 +106,15 @@ public sealed class WindowsMdnsAdvertiser : IDisposable
             return false;
         }
 
+        _callbackPending = true;
         if (!_completed.Wait(TimeSpan.FromSeconds(5)))
         {
             _log.Warn(Tag, "No confirmation from Windows yet; the service may still appear.");
             _registered = true;
             return true;
         }
+
+        _callbackPending = false;
 
         _registered = _lastStatus == ErrorSuccess;
         if (_registered)
@@ -143,7 +153,7 @@ public sealed class WindowsMdnsAdvertiser : IDisposable
         var result = NativeMethods.DnsServiceDeRegister(_request, IntPtr.Zero);
         if (result == DnsRequestPending)
         {
-            _completed.Wait(TimeSpan.FromSeconds(2));
+            _callbackPending = !_completed.Wait(TimeSpan.FromSeconds(2));
         }
 
         _log.Info(Tag, $"Stopped advertising '{ServiceName}'.");
@@ -173,6 +183,17 @@ public sealed class WindowsMdnsAdvertiser : IDisposable
     public void Dispose()
     {
         Unregister();
+        if (_callbackPending)
+        {
+            // A late callback would touch freed memory and a collected delegate. Leaking a few bytes is safer.
+            lock (Abandoned)
+            {
+                Abandoned.Add(this);
+            }
+
+            return;
+        }
+
         Release();
         _completed.Dispose();
     }

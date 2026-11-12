@@ -22,8 +22,6 @@ public static class ZwiftUuids
     public static readonly Guid FirmwareRevision = new("00002a26-0000-1000-8000-00805f9b34fb");
     public static readonly Guid BatteryService = new("0000180f-0000-1000-8000-00805f9b34fb");
     public static readonly Guid BatteryLevel = new("00002a19-0000-1000-8000-00805f9b34fb");
-
-    public static bool IsZwiftCustomService(Guid uuid) => uuid == CustomService || uuid == RideCustomService;
 }
 
 public static class ZwiftConstants

@@ -6,10 +6,14 @@ using System.Text.Json.Serialization;
 namespace ClickBridge.Core.Zwift;
 
 /// <summary>Obtains signed Click v2 unlock responses using a Zwift account session.</summary>
+/// <param name="saveRefreshToken">
+/// Called with every rotated refresh token, and with <see langword="null"/> when Zwift rejected the session
+/// so the stored token can be forgotten.
+/// </param>
 public sealed class ZwiftUnlockClient(
     HttpClient http,
     string? refreshToken,
-    Func<string, Task> saveRefreshToken)
+    Func<string?, Task> saveRefreshToken)
 {
     private const string ClientId = "Zwift Game Client";
     private const string Protobuf = "application/x-protobuf-lite";
@@ -99,6 +103,7 @@ public sealed class ZwiftUnlockClient(
                 _refreshToken = null;
             }
 
+            await saveRefreshToken(null).ConfigureAwait(false);
             throw;
         }
 
@@ -126,7 +131,8 @@ public sealed class ZwiftUnlockClient(
         var body = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            if (response.StatusCode == HttpStatusCode.BadRequest && IsInvalidGrant(body))
+            // Keycloak answers 400 for a dead refresh token and 401 for a wrong password, both as "invalid_grant".
+            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized && IsInvalidGrant(body))
             {
                 throw new UnauthorizedAccessException("Zwift rejected the sign-in session or credentials.");
             }
@@ -141,7 +147,7 @@ public sealed class ZwiftUnlockClient(
             throw new InvalidDataException("Zwift did not return usable session tokens.");
         }
 
-        return new Session(tokens.AccessToken, nextRefreshToken, DateTimeOffset.UtcNow.AddSeconds(tokens.ExpiresIn));
+        return new Session(tokens.AccessToken, nextRefreshToken, DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, tokens.ExpiresIn)));
     }
 
     private async Task<byte[]?> RequestReplyAsync(

@@ -35,15 +35,16 @@ public sealed class ZwiftControllerScanner : IDisposable
     /// <summary>Checks that a BLE adapter with central role is present and powered.</summary>
     public static async Task<bool> CheckAdapterAsync(IBridgeLog log)
     {
-        var adapter = await BluetoothAdapter.GetDefaultAsync();
+        // No captured context: the tray app calls this from the UI thread and may block on it while exiting.
+        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask().ConfigureAwait(false);
         if (adapter is null)
         {
             log.Error("BLE", "No Bluetooth adapter found.");
             return false;
         }
 
-        var radio = await adapter.GetRadioAsync();
-        log.Info("BLE", $"Adapter {adapter.BluetoothAddress:X12}: LE={adapter.IsLowEnergySupported} central={adapter.IsCentralRoleSupported} radio={radio?.State.ToString() ?? "?"}");
+        var radio = await adapter.GetRadioAsync().AsTask().ConfigureAwait(false);
+        log.Info("BLE", $"Adapter: LE={adapter.IsLowEnergySupported} central={adapter.IsCentralRoleSupported} radio={radio?.State.ToString() ?? "?"}");
         if (!adapter.IsLowEnergySupported || !adapter.IsCentralRoleSupported)
         {
             log.Error("BLE", "The adapter does not support the BLE central role.");
